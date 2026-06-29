@@ -97,7 +97,7 @@ class SimParams:
     name: str
     fidelity: str            # "lowres" (1536) | "hires" (3072)
     box: float               # Mpc/h  (authoritative, from run config)
-    npart: int               # particles per side (production Ngrid)
+    npart: int               # 1-D particle/grid count per side (1536 => a 1536^3 run)
     # cosmology
     omega0: float
     omegab: float

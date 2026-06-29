@@ -41,6 +41,21 @@ def test_reads_production_box_and_ngrid(tmp_path):
     assert cfg.ic_basename == "120_1536_99"
 
 
+def test_records_box_and_ngrid_provenance(tmp_path):
+    # box comes from genic BoxSize (exact float); ngrid from mpgadget InitCondFile.
+    _write(tmp_path)
+    cfg = rc.read_run_config(tmp_path)
+    assert cfg.box_source == "_genic_params.ini"
+    assert cfg.ngrid_source == "mpgadget.param"
+
+
+def test_provenance_when_only_genic(tmp_path):
+    _write(tmp_path, mpgadget=None)
+    cfg = rc.read_run_config(tmp_path)
+    assert cfg.box_source == "_genic_params.ini"
+    assert cfg.ngrid_source == "_genic_params.ini"
+
+
 def test_ngrid_not_confused_by_ngridnu(tmp_path):
     # A naive 'startswith("Ngrid")' would read NgridNu=0; must get 1536.
     _write(tmp_path)

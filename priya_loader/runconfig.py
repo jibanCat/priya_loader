@@ -29,12 +29,20 @@ _IC_BASENAME_RE = re.compile(r"(?P<box>\d+)_(?P<ngrid>\d+)_(?P<zinit>\d+)")
 
 @dataclass(frozen=True)
 class RunConfig:
-    """The box size (Mpc/h) and production particle grid actually run."""
+    """The box size (Mpc/h) and production particle grid actually run.
+
+    ``box`` and ``ngrid`` can come from different files, so their provenance is
+    recorded separately. In the normal case both run files are present and::
+
+        RunConfig(box_source="_genic_params.ini",   # exact BoxSize/1000
+                  ngrid_source="mpgadget.param")     # InitCondFile = ICS/<box>_<Ngrid>_99
+    """
 
     box: float            # Mpc/h
-    ngrid: int            # particles per side (production resolution)
+    ngrid: int            # particles per side, 1-D count (1536 => a 1536^3 run)
     ic_basename: str      # e.g. "120_1536_99"
-    source: str           # which file the values came from
+    box_source: str       # file the box came from
+    ngrid_source: str     # file the Ngrid came from
 
 
 def _parse_ini_value(text: str, key: str) -> Optional[str]:
@@ -84,13 +92,18 @@ def read_run_config(sim_dir: StrPath) -> RunConfig:
         )
 
     if mp_ngrid is not None:
-        box = mp_box if gen_box is None else gen_box  # genic BoxSize is exact
-        return RunConfig(box=box, ngrid=mp_ngrid,
-                         ic_basename=mp_basename, source="mpgadget.param")
+        # ngrid from mpgadget InitCondFile; box from genic BoxSize (exact) if present.
+        if gen_box is not None:
+            box, box_source = gen_box, "_genic_params.ini"
+        else:
+            box, box_source = mp_box, "mpgadget.param"
+        return RunConfig(box=box, ngrid=mp_ngrid, ic_basename=mp_basename,
+                         box_source=box_source, ngrid_source="mpgadget.param")
     if gen_ngrid is not None:
         basename = f"{int(round(gen_box))}_{gen_ngrid}_99"
-        return RunConfig(box=gen_box, ngrid=gen_ngrid,
-                         ic_basename=basename, source="_genic_params.ini")
+        return RunConfig(box=gen_box, ngrid=gen_ngrid, ic_basename=basename,
+                         box_source="_genic_params.ini",
+                         ngrid_source="_genic_params.ini")
 
     raise FileNotFoundError(
         f"{sim_dir}: neither mpgadget.param nor _genic_params.ini found; "

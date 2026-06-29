@@ -5,8 +5,9 @@ snapshot, the tuple a downstream (e.g. JAX) pipeline wants::
 
     Sample(params, redshift, ic, tau)
 
-where ``ic`` is the initial-condition CIC overdensity mesh (z_init, real space)
-and ``tau`` is the raw Lyman-alpha optical-depth cube for one LOS axis. It ties
+where ``ic`` is the initial-condition density mesh (z_init, real space — the CIC
+overdensity, or the linear ``delta_1`` with ``ic_field="icdensity"``) and ``tau``
+is the raw Lyman-alpha optical-depth cube for one LOS axis. It ties
 together :mod:`priya_loader.paths`, :mod:`priya_loader.params`,
 :mod:`priya_loader.ic`, and :mod:`priya_loader.tau`.
 
@@ -83,14 +84,24 @@ class PriyaDataset:
         fidelity: Optional[str] = None,
         ic_nmesh: int = 256,
         ic_ptype: str = "dm",
+        ic_field: str = "cic",
         flux_axis: int = 1,
         load_ic: bool = True,
         validate: bool = True,
     ):
+        if flux_axis not in (1, 2, 3):
+            raise ValueError(f"flux_axis must be 1, 2 or 3; got {flux_axis!r}")
+        if ic_ptype not in ("dm", "gas"):
+            raise ValueError(f"ic_ptype must be 'dm' or 'gas'; got {ic_ptype!r}")
+        if ic_field not in ("cic", "icdensity"):
+            raise ValueError(f"ic_field must be 'cic' or 'icdensity'; got {ic_field!r}")
+        if ic_nmesh < 1:
+            raise ValueError(f"ic_nmesh must be >= 1; got {ic_nmesh}")
         self.root = Path(root)
         self.fidelity = fidelity
         self.ic_nmesh = ic_nmesh
         self.ic_ptype = ic_ptype
+        self.ic_field = ic_field
         self.flux_axis = flux_axis
         self.load_ic = load_ic
         self.validate = validate
@@ -116,13 +127,22 @@ class PriyaDataset:
             if self.load_ic:
                 ic_dir = paths.find_production_ic_dir(sim.directory)
                 if ic_dir is not None:
-                    f = load_ic_density(ic_dir, ptype=self.ic_ptype, nmesh=self.ic_nmesh)
-                    ic_arr = f.delta
-                    ic_meta = {"ic_axes": f.axes, "ic_space": f.space,
-                               "ic_redshift": f.redshift, **f.meta}
+                    try:
+                        f = load_ic_density(ic_dir, ptype=self.ic_ptype,
+                                            nmesh=self.ic_nmesh, field=self.ic_field)
+                        ic_arr = f.delta
+                        ic_arr.flags.writeable = False     # shared across this sim's redshifts
+                        ic_meta = {"ic_axes": f.axes, "ic_space": f.space,
+                                   "ic_redshift": f.redshift, **f.meta}
+                    except Exception as e:   # skeleton/corrupt ICs raise various bigfile errors
+                        warnings.warn(f"{sim.name}: IC load failed ({e!r}); ic=None")
 
             for snap, tau_path in tau_files:
-                g = load_tau_grid(tau_path, axis=self.flux_axis)
+                try:
+                    g = load_tau_grid(tau_path, axis=self.flux_axis)
+                except (ValueError, OSError) as e:
+                    warnings.warn(f"{sim.name} SPECTRA_{snap:03d}: tau load failed ({e}); skipped")
+                    continue
                 yield Sample(
                     params=params,
                     redshift=g.redshift,
@@ -144,29 +164,54 @@ class PriyaDataset:
         return list(self.iter_samples())
 
     def export(self, outdir: StrPath, fmt: str = "npz") -> List[Path]:
-        """Write one ``.npz`` per (sim, z) with ``ic``, ``tau``, ``redshift``,
-        and JSON-serialised ``params``. Returns the written paths.
+        """Write one compressed ``.npz`` per (sim, z); returns the written paths.
 
-        NERSC-login-safe: streams one sample at a time. (The IC is repeated per
-        redshift on disk; pass ``load_ic=False`` + export IC separately if that
-        duplication matters.)
+        Each archive holds (load with ``np.load(path, allow_pickle=True)``):
+          * ``ic``  : float32 ``(nmesh, nmesh, nmesh)`` IC field, or ``(0,)`` if absent;
+          * ``tau`` : float32 ``(ngrid, ngrid, nbins)`` optical depth, or ``(0,)``;
+          * ``redshift`` : float64 scalar;
+          * ``params`` : JSON string of the **resolved** ``SimParams.to_dict()``
+            (authoritative box/npart + cosmology for the growth factor);
+          * ``meta`` : JSON string with co-registration info (``tau_cube_axes``,
+            ``tau_space``, ``dv_kms``, ``box_mpc_h``) and IC provenance
+            (``ic_field``, ``ic_space``, ``ic_redshift``, ``Omega0/OmegaLambda/Time``).
+
+        NERSC-login-safe: streams one sample at a time; writes atomically
+        (``.tmp`` + ``os.replace``). The IC is repeated per redshift on disk; pass
+        ``load_ic=False`` + export the IC separately if that duplication matters.
         """
         if fmt != "npz":
             raise ValueError(f"unknown export format {fmt!r} (only 'npz')")
         outdir = Path(outdir)
         outdir.mkdir(parents=True, exist_ok=True)
         written: List[Path] = []
+        empty = np.empty(0, dtype=np.float32)
         for s in self.iter_samples():
-            fname = f"{s.meta['sim']}__z{s.redshift:.2f}__axis{self.flux_axis}.npz"
-            path = outdir / fname
-            np.savez_compressed(
-                path,
-                ic=s.ic if s.ic is not None else np.array([]),
-                tau=s.tau if s.tau is not None else np.array([]),
-                redshift=np.float64(s.redshift),
-                params=json.dumps(s.params.raw),
-                meta=json.dumps({k: v for k, v in s.meta.items()
-                                 if k in ("sim", "snap", "flux_axis")}),
-            )
+            tm = s.meta.get("tau_meta", {})
+            im = s.meta.get("ic_meta", {})
+            export_meta = {
+                "sim": s.meta["sim"], "snap": s.meta["snap"], "flux_axis": self.flux_axis,
+                "tau_cube_axes": list(s.meta.get("tau_cube_axes") or []),
+                "tau_space": s.meta.get("tau_space"),
+                "dv_kms": tm.get("dv_kms"), "tau_nbins": tm.get("nbins"),
+                "box_mpc_h": s.params.box,
+                "ic_present": s.ic is not None,
+                "ic_field": im.get("field"), "ic_space": im.get("ic_space"),
+                "ic_redshift": im.get("ic_redshift"),
+                "Omega0": im.get("Omega0"), "OmegaLambda": im.get("OmegaLambda"),
+                "Time": im.get("Time"),
+            }
+            path = outdir / f"{s.meta['sim']}__snap{s.meta['snap']:03d}__axis{self.flux_axis}.npz"
+            tmp = path.with_name(path.name + ".tmp")
+            with open(tmp, "wb") as fh:
+                np.savez_compressed(
+                    fh,
+                    ic=s.ic if s.ic is not None else empty,
+                    tau=s.tau if s.tau is not None else empty,
+                    redshift=np.float64(s.redshift),
+                    params=json.dumps(s.params.to_dict()),
+                    meta=json.dumps(export_meta),
+                )
+            os.replace(tmp, path)
             written.append(path)
         return written

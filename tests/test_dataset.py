@@ -50,8 +50,12 @@ def _write_ic(path, ng=8, box=120000.0):
     g = (np.arange(ng) + 0.5) * box / ng
     X, Y, Z = np.meshgrid(g, g, g, indexing="ij")
     pos = np.stack([X.ravel(), Y.ravel(), Z.ravel()], axis=1).astype("f8")
+    n = pos.shape[0]
+    ii = np.arange(n) // (ng * ng)
     with bigfile.File(str(path), create=True) as bf:
         bf.create_from_array("1/Position", pos)
+        bf.create_from_array("1/ID", (np.arange(n) + 1).astype("u8"))
+        bf.create_from_array("1/ICDensity", np.sin(2 * np.pi * ii / ng).astype("f4"))
         bf.create("Header")
         bf["Header"].attrs["BoxSize"] = box
         bf["Header"].attrs["Redshift"] = 99.0
@@ -60,18 +64,25 @@ def _write_ic(path, ng=8, box=120000.0):
         bf["Header"].attrs["OmegaLambda"] = 0.738
 
 
-def _make_sim(root, name, jsondict, *, snaps=(4,), with_ic=True, ngrid=1536):
+def _make_sim(root, name, jsondict, *, snaps=(4,), with_ic=True, ngrid=1536,
+              broken_ic=False, bad_tau=False):
     d = root / name
     (d / "output").mkdir(parents=True)
     (d / "SimulationICs.json").write_text(json.dumps(jsondict))
     (d / "mpgadget.param").write_text(f"InitCondFile = ICS/120_{ngrid}_99\n")
     (d / "_genic_params.ini").write_text(f"Ngrid = {ngrid}\nBoxSize = 120000\nNgridNu = 0\n")
-    if with_ic:
+    if broken_ic:
+        (d / "ICS" / f"120_{ngrid}_99").mkdir(parents=True)   # skeleton dir, no data
+    elif with_ic:
         _write_ic(d / "ICS" / f"120_{ngrid}_99")
     for i, s in enumerate(snaps):
         sd = d / "output" / f"SPECTRA_{s:03d}"
         sd.mkdir(parents=True)
-        _write_tau(sd / "lya_forest_spectra_grid_480.hdf5", redshift=5.0 - 0.2 * i)
+        f = sd / "lya_forest_spectra_grid_480.hdf5"
+        if bad_tau:
+            f.write_bytes(b"\x89HDF\r\n\x1a\n" + b"\x00" * 64)   # truncated/corrupt
+        else:
+            _write_tau(f, redshift=5.0 - 0.2 * i)
     return d
 
 
@@ -145,4 +156,41 @@ def test_export_npz_roundtrip(tmp_path):
     assert z["tau"].shape == (4, 4, 5)
     assert z["ic"].shape == (8, 8, 8)
     assert float(z["redshift"]) == pytest.approx(5.0)
-    assert "ns" in json.loads(str(z["params"]))
+    params = json.loads(str(z["params"]))
+    # resolved params (authoritative), not the stale JSON box=15/npart=192
+    assert params["box"] == pytest.approx(120.0)
+    assert params["npart"] == 1536
+    meta = json.loads(str(z["meta"]))
+    assert tuple(meta["tau_cube_axes"]) == ("y", "z", "x")   # co-registration info retained
+
+
+def test_ic_field_icdensity_through_dataset(tmp_path):
+    # The headline orchestrator can deliver Roger's linear delta_1.
+    _make_sim(tmp_path, NAME_A, JSON_A, snaps=(4,))
+    s = list(ds.PriyaDataset(tmp_path, ic_nmesh=8, ic_field="icdensity"))[0]
+    assert s.meta["ic_meta"]["field"] == "icdensity"
+    expected = np.sin(2 * np.pi * np.arange(8) / 8).astype(np.float32)
+    np.testing.assert_allclose(s.ic[:, 0, 0], expected, atol=1e-6)
+
+
+def test_graceful_on_broken_ic(tmp_path):
+    # A skeleton (data-less) production IC dir must yield ic=None, not crash.
+    _make_sim(tmp_path, NAME_A, JSON_A, snaps=(4,), broken_ic=True)
+    with pytest.warns(Warning):
+        s = list(ds.PriyaDataset(tmp_path, ic_nmesh=8))[0]
+    assert s.ic is None
+    assert s.tau is not None
+
+
+def test_graceful_on_truncated_tau(tmp_path):
+    # A truncated tau file is skipped (warn), not fatal.
+    _make_sim(tmp_path, NAME_A, JSON_A, snaps=(4, 5), bad_tau=True)
+    with pytest.warns(Warning):
+        samples = list(ds.PriyaDataset(tmp_path, ic_nmesh=8))
+    assert samples == []          # both snapshots truncated -> skipped, no crash
+
+
+def test_shared_ic_is_read_only(tmp_path):
+    _make_sim(tmp_path, NAME_A, JSON_A, snaps=(4,))
+    s = list(ds.PriyaDataset(tmp_path, ic_nmesh=8))[0]
+    assert s.ic.flags.writeable is False   # protects the IC shared across redshifts

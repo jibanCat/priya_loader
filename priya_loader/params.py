@@ -241,6 +241,20 @@ class SimParams:
         """Return the named parameters as a float array, in the given order."""
         return np.array([getattr(self, k) for k in keys], dtype=float)
 
+    def to_dict(self) -> dict:
+        """Resolved parameters as a JSON-serialisable dict (authoritative box/npart
+        from the run config, not the possibly-stale JSON)."""
+        return {
+            "name": self.name, "fidelity": self.fidelity,
+            "box": self.box, "npart": self.npart,
+            "omega0": self.omega0, "omegab": self.omegab, "hubble": self.hubble,
+            "omega_lambda": self.omega_lambda, "omega_m_h2": self.omega_m_h2,
+            "scalar_amp": self.scalar_amp, "ns": self.ns,
+            "here_i": self.here_i, "here_f": self.here_f, "alpha_q": self.alpha_q,
+            "hireionz": self.hireionz, "bhfeedback": self.bhfeedback,
+            "heatamp": self.heatamp, "z_init": self.z_init, "z_end": self.z_end,
+        }
+
 
 def _fidelity_from_ngrid(ngrid: int) -> str:
     if ngrid == 1536:

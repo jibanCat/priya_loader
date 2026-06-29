@@ -1,5 +1,14 @@
 """Streaming cloud-in-cell (CIC) mesh painter — pure numpy, memory-safe.
 
+**Not nbodykit / pmesh.** This is a self-contained implementation of the
+standard cloud-in-cell mass-assignment scheme (Hockney & Eastwood 1981, "Computer
+Simulation Using Particles", §5-3): a `np.bincount` scatter of the 8 tri-linear
+corner weights with periodic wrap. It has **no third-party meshing dependency**
+(no nbodykit, pmesh, or MPI) — only numpy — so there is no external commit to
+pin. It matches nbodykit's ``resampler="cic"`` *uncompensated* result up to the
+CIC window (we ship raw; see below). ``backend="nbodykit"`` in the IC loader is
+not implemented.
+
 Deposits particle positions onto a periodic ``nmesh^3`` grid. Designed to be fed
 in **chunks** (accumulate into a preallocated ``out`` array) so a huge particle
 load never has to be resident at once. Peak memory is ``~2 * nmesh^3`` float64

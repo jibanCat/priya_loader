@@ -11,8 +11,8 @@ simulation into clean 3-D numpy arrays so you can treat the suite as a dataset:
   *unmodified*). Flux `F = exp(−τ)` and `δ_F = F/⟨F⟩ − 1` are provided as
   optional derived helpers.
 
-The headline object (coming in a later release) loops over every
-simulation/redshift and yields, per snapshot:
+The headline object `PriyaDataset` loops over every simulation/redshift and
+yields, per snapshot:
 
 ```python
 [ SimParams, redshift, ic_density_3d, tau_3d ]
@@ -23,7 +23,8 @@ so a downstream pipeline (e.g. a JAX bias-estimation code) can `np.load` and go:
 ```python
 from priya_loader import PriyaDataset
 
-ds = PriyaDataset("/path/to/priya/emu_full", fidelity="lowres", ic_nmesh=256, flux_axis=1)
+ds = PriyaDataset("/path/to/priya/emu_full", fidelity="lowres",
+                  ic_nmesh=256, ic_field="cic", flux_axis=1)   # ic_field="icdensity" for linear δ₁
 for s in ds:                       # lazy: one (sim, redshift) in memory at a time
     s.params, s.redshift, s.ic, s.tau     # SimParams, float, (nmesh³) δ, (480,480,nbins) τ
     # ... or s.as_tuple() -> (params, redshift, ic, tau)
@@ -35,10 +36,10 @@ It degrades gracefully on partial/mid-transfer data: sims with no staged `tau`
 are skipped, a missing production IC yields `ic=None` (τ-only samples), and a
 folder that fails parameter validation is skipped with a warning.
 
-> **Status.** This version ships the building blocks (`units`, `params`,
-> `runconfig`, `paths`), the Lyman-α `tau` loader (`load_tau_grid`), **and the IC
-> density loader** (`load_ic_density`). The `PriyaDataset` orchestrator that ties
-> them into the `[params, z, ic, tau]` tuple lands in a subsequent release.
+> **Status.** This version ships the full stack: the building blocks (`units`,
+> `params`, `runconfig`, `paths`), the Lyman-α `tau` loader (`load_tau_grid`), the
+> IC density loader (`load_ic_density`), **and the `PriyaDataset` orchestrator**
+> that ties them into the `[params, z, ic, tau]` tuple.
 
 ## Install
 
@@ -111,18 +112,26 @@ it fits a NERSC login node — all three axes would be ~4.6 GB.
 ```python
 from priya_loader import load_ic_density
 
-f = load_ic_density(ic_dir, ptype="dm", nmesh=256)   # bigfile particles -> CIC mesh
-f.delta        # (nmesh, nmesh, nmesh) float32 overdensity rho/<rho>-1, axes (x,y,z)
+# Eulerian CIC density of the displaced particles (default):
+f = load_ic_density(ic_dir, ptype="dm", nmesh=256)              # -> rho/<rho>-1
+# OR the exact linear delta_1 for the bias cross-spectrum (Roger's estimator):
+f = load_ic_density(ic_dir, ptype="dm", nmesh=512, field="icdensity")
+f.delta        # (nmesh, nmesh, nmesh) float32, axes (x,y,z)
 f.redshift     # IC redshift (~99); f.meta has Omega0/OmegaLambda/Time for D(z)
 ```
 
-The IC density is the **Eulerian CIC field of the displaced particles** at
-`z_init≈99` (not the native linear `ICDensity` block), in **real space**, and is
-**raw/uncompensated** CIC. To cross-correlate with `tau` for the flux bias, you
-(the consumer) handle: the growth rescale `D(z_flux)/D(z_init)`, the `sinc²` CIC
-deconvolution, co-registering to the τ cube's `cube_axes` at `nmesh=480`
-transverse (the τ LOS is a redshift-space velocity axis — resample it separately),
-and the mean-flux normalization. `bigfile` is required (`pip install -e ".[ic]"`).
+**Choosing the field.** `field="icdensity"` returns the native **linear `δ₁`**
+(the `ICDensity` block on the Lagrangian grid) — the exact field a field-level
+bias estimator wants; `field="cic"` (default) returns the **Eulerian** density of
+the displaced particles. For `icdensity`, use `nmesh` dividing `ngrid`
+(512/1536 → 128/256/384/512) and `nmesh ≤ ngrid`; it is window-free at
+`nmesh=ngrid`, a sinc top-hat below. Both are **real-space**, at `z_init≈99`.
+
+To cross-correlate with `tau` for the flux bias, you (the consumer) handle: the
+growth rescale `D(z_flux)/D(z_init)`, deconvolving the IC window (CIC `sinc²` or
+icdensity sinc), co-registering to the τ cube's `cube_axes` (the τ LOS is a
+redshift-space velocity axis — resample it separately), and the mean-flux
+normalization. `bigfile` is required (`pip install -e ".[ic]"`).
 
 **IC memory vs `nmesh`** (one τ axis ≈ 1.46 GB; reading `Position` is I/O-bound:
 81 GB/type at 1536³, 648 GB/type at 3072³):

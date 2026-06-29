@@ -16,7 +16,7 @@ from priya_loader import ic, mesh
 
 def _make_ic_bigfile(path, ngrid=8, box=120000.0, ptypes=(1,), redshift=99.0,
                      time=None, clustered=False, with_boxsize=True, positions=None,
-                     with_icdensity=False, id_offset=0):
+                     with_icdensity=False, id_offset=0, shuffle=False, gap_ids=False):
     """Write a tiny IC bigfile. Particles on a regular ngrid^3 lattice at cell
     centres (=> uniform density), unless ``clustered`` or explicit ``positions``.
 
@@ -35,6 +35,12 @@ def _make_ic_bigfile(path, ngrid=8, box=120000.0, ptypes=(1,), redshift=99.0,
     ii = idx // (ngrid * ngrid)
     icdensity = np.sin(2 * np.pi * ii / ngrid).astype("f4")
     ids = (idx + 1 + id_offset).astype("u8")
+    if gap_ids:
+        ids = ids.copy()
+        ids[0] = ids.max() + 100            # non-contiguous: breaks max-min+1 == npart
+    if shuffle:
+        perm = np.random.RandomState(7).permutation(n)   # scramble on-disk order
+        pos, ids, icdensity = pos[perm], ids[perm], icdensity[perm]
     with bigfile.File(str(path), create=True) as bf:
         for t in ptypes:
             bf.create_from_array(f"{t}/Position", pos)
@@ -207,3 +213,30 @@ def test_invalid_field_raises(tmp_path):
     p = _make_ic_bigfile(tmp_path / "ic", ngrid=8)
     with pytest.raises(ValueError):
         ic.load_ic_density(p, ptype="dm", nmesh=8, field="bogus")
+
+
+def test_icdensity_uses_id_not_on_disk_order(tmp_path):
+    # Scramble on-disk order: a positional loader would fail; ID-based scatter recovers it.
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=8, with_icdensity=True, shuffle=True)
+    f = ic.load_ic_density(p, ptype="dm", nmesh=8, field="icdensity")
+    expected = np.sin(2 * np.pi * np.arange(8) / 8).astype(np.float32)
+    np.testing.assert_allclose(f.delta[:, 0, 0], expected, atol=1e-6)
+
+
+def test_icdensity_incomplete_ids_raise(tmp_path):
+    # A non-contiguous / partial ID set (cubic count but a gap) must error, not mis-index.
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=8, with_icdensity=True, gap_ids=True)
+    with pytest.raises(ValueError):
+        ic.load_ic_density(p, ptype="dm", nmesh=8, field="icdensity")
+
+
+def test_icdensity_nmesh_gt_ngrid_raises(tmp_path):
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=8, with_icdensity=True)
+    with pytest.raises(ValueError):
+        ic.load_ic_density(p, ptype="dm", nmesh=16, field="icdensity")
+
+
+def test_icdensity_nmesh_not_divisor_warns(tmp_path):
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=8, with_icdensity=True)
+    with pytest.warns(Warning):
+        ic.load_ic_density(p, ptype="dm", nmesh=5, field="icdensity")

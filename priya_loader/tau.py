@@ -2,10 +2,14 @@
 HDF5 product (``lya_forest_spectra_grid_480.hdf5``).
 
 The product stores HI Lyman-alpha optical depth at ``tau/H/1/1215`` with shape
-``(Nlos, nbins)``, where ``Nlos = 3 * ngrid**2`` sightlines form a regular
-``ngrid x ngrid`` transverse grid along **three** line-of-sight axes (x, y, z),
-stored contiguously in that order. ``nbins`` (LOS velocity pixels) is
-**redshift-dependent**.
+``(Nlos, nbins)``. The key encodes ``tau/<element>/<ion>/<lambda>`` =
+H / ion 1 (HI) / 1215 Å (fake_spectra ``spectra.py:332-350`` @ v2.2.3 93d0e509).
+This is the **3-axis grid product**: ``Nlos = 3 * ngrid**2`` sightlines form a
+regular ``ngrid x ngrid`` transverse grid along each of the three line-of-sight
+axes (x, y, z), the axis=1,2,3 blocks contiguous (``griddedspectra.py:42-60``).
+``nbins`` (LOS velocity pixels) is **redshift-dependent**. The loader rejects a
+single-axis file: ``ngrid = sqrt(Nlos/3)`` would not be integer, and the
+``spectra/axis`` guard would fail.
 
 :func:`load_tau_grid` returns the RAW tau for one chosen axis, reshaped (C-order)
 to a ``(ngrid, ngrid, nbins)`` cube — never resampled or rebinned. A cheap
@@ -13,8 +17,10 @@ runtime check (``spectra/axis``) guards against a mis-ordered file.
 
 Two things a downstream (bias) analysis must know, exposed on :class:`TauGrid`:
 
-* **The tau is redshift-space** — ``fake_spectra`` includes peculiar velocities,
-  so the LOS (last) axis is a *velocity* axis and the field carries RSD (beta_F).
+* **The tau is redshift-space** — ``fake_spectra`` bins absorption in velocity
+  with ``vel = velfac*pos + pvel`` (Hubble flow + peculiar velocity;
+  ``absorption.cpp:234`` @ v2.2.3 93d0e509), so the LOS (last) axis is a
+  *velocity* axis and the field carries RSD (beta_F).
 * **The two transverse cube indices are different physical coordinates per axis**
   (``cube_axes``): axis 1 -> ``(y, z, x_los)``, axis 2 -> ``(x, z, y_los)``,
   axis 3 -> ``(x, y, z_los)``, with the LOS coordinate last. Co-registering with
@@ -41,6 +47,14 @@ TAU_KEY = "tau/H/1/1215"
 N_AXES = 3   # x, y, z line-of-sight directions
 
 #: cube index -> physical coordinate, per LOS axis. (LOS coordinate is last.)
+#:
+#: Origin: fake_spectra ``griddedspectra.py:42-60`` @ v2.2.3 (commit 93d0e509),
+#: which builds the transverse grid as
+#:   axis==1: [0, nn, mm];  axis==2: [nn, 0, mm];  axis==3: [nn, mm, 0]
+#: with ``for nn ... for mm ...`` (nn = outer/slow C-order index, mm = inner).
+#: So cube[nn, mm] -> (y,z)/(x,z)/(x,y) with the lower-numbered transverse coord
+#: as the slow index. Independently confirmed against ``spectra/cofm`` in a real
+#: file (held LOS coord = 0; 250 ckpc/h spacing) for all three axes.
 CUBE_AXES = {1: ("y", "z", "x"), 2: ("x", "z", "y"), 3: ("x", "y", "z")}
 
 
@@ -91,7 +105,13 @@ def load_tau_grid(path: StrPath, axis: int = 1) -> TauGrid:
     """
     if axis not in (1, 2, 3):
         raise ValueError(f"axis must be 1, 2 or 3 (x/y/z); got {axis!r}")
-    with h5py.File(path, "r") as f:
+    try:
+        h5 = h5py.File(path, "r")
+    except OSError as e:
+        # A mid-transfer / truncated file is not openable by h5py.
+        raise ValueError(f"{path}: cannot open (truncated or corrupt HDF5?): {e}") from e
+    with h5:
+        f = h5
         if "Header" not in f:
             raise ValueError(f"{path}: no 'Header' group (not a fake_spectra file?)")
         if TAU_KEY not in f:

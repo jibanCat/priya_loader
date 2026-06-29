@@ -155,6 +155,13 @@ point at a staged tree:
 PRIYA_DATA_ROOT=/path/to/priya/emu_full pytest -m realdata
 ```
 
+## Provenance
+
+Every non-obvious convention this package encodes — the MP-Gadget unit constants,
+the `Ap` amplitude pivot, the simulation folder-name format, and the
+`fake_spectra` tau layout / axis ordering — is traced to its upstream source
+(repo, file:line, pinned commit) in [PROVENANCE.md](PROVENANCE.md).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

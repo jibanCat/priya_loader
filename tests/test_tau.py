@@ -161,6 +161,14 @@ def test_bad_skewer_count_raises(tmp_path):
         T.load_tau_grid(p, axis=1)
 
 
+def test_truncated_or_corrupt_file_raises_valueerror(tmp_path):
+    # A half-transferred file is not openable by h5py -> clear, path-bearing error.
+    p = tmp_path / "lya_forest_spectra_grid_480.hdf5"
+    p.write_bytes(b"\x89HDF\r\n\x1a\n" + b"\x00" * 64)   # HDF5 magic then garbage
+    with pytest.raises(ValueError):
+        T.load_tau_grid(p, axis=1)
+
+
 # --- flux helpers -------------------------------------------------------------
 def test_flux_helpers(tau_file):
     g = T.load_tau_grid(tau_file, axis=1)

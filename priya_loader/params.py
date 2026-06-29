@@ -4,13 +4,20 @@ Each simulation lives in a folder whose name encodes nine parameters, e.g.::
 
     ns0.905Ap1.79e-09herei3.97heref2.99alphaq2.1hub0.745omegamh20.145hireionz7.47bhfeedback0.043
 
+The name is built by ``lyaemu/coarse_grid.py:build_dirname`` (lines 106-118 @
+commit 27dac4f) by concatenating ``<name><value>`` with ``"%.3g"`` formatting,
+in the order of ``coarse_grid.py:41`` ``param_names``
+(``ns, Ap, herei, heref, alphaq, hub, omegamh2, hireionz, bhfeedback``).
+
 Where each parameter comes from
 -------------------------------
 * **box size & particle grid** : the authoritative run files
   (``mpgadget.param`` / ``_genic_params.ini``) via :mod:`priya_loader.runconfig`.
-  The ``SimulationICs.json`` ``box``/``npart`` are template leftovers for much of
-  the suite (they read ``box=15, npart=192`` for production 120 Mpc/h 1536^3 runs)
-  and are deliberately NOT trusted.
+  ``SimulationICs.json`` is **not** trusted for these: it is written once at
+  IC-build time from a ``__dict__`` snapshot (``SimulationRunner
+  simulationics.py:267-285 @ 5adf4fe``) and is not rewritten when GenIC is later
+  regenerated, so for ~half the suite its ``box``/``npart`` read ``15``/``192``
+  (values from the generating script) while the production run is 120 Mpc/h, 1536^3.
 * **cosmology & astro/thermal params** : ``SimulationICs.json`` (high precision).
 * **folder-name tokens** : used only as a cross-check (rounded; and the folder
   ``Ap`` is the primordial amplitude at PRIYA's k=0.78 Mpc^-1 pivot, deterministic-
@@ -53,8 +60,12 @@ _FLOAT = r"([-+0-9.eE]+)"
 _NAME_RE = re.compile("".join(f"{k}{_FLOAT}" for k in _NAME_KEYS) + r"$")
 
 # Pivot wavenumbers (Mpc^-1) for the amplitude cross-check.
-PIVOT_K_SCALAR_AMP = 0.05    # A_s pivot (CAMB/CLASS default)
-PIVOT_K_AP = 0.78            # PRIYA folder-"Ap" pivot
+# Origin: lya_emulator lyaemu/coarse_grid.py:154-157 @ 27dac4f --
+#   conv = (0.05 / (2*pi/8))**(ns-1) ; scalar_amp(=A_s @0.05) = Ap / conv
+# i.e. Ap = scalar_amp * ((2*pi/8) / 0.05)**(ns-1). The exact pivot is 2*pi/8
+# (= 0.7854 Mpc^-1); the folder name's "Ap" comment rounds it to 0.78.
+PIVOT_K_SCALAR_AMP = 0.05               # A_s pivot (CAMB/CLASS default)
+PIVOT_K_AP = 2.0 * np.pi / 8.0          # PRIYA "Ap" pivot, 8 Mpc/h scale (~0.7854)
 
 # Allowed (npart per side, box Mpc/h) combinations for the released suite.
 _ALLOWED_RESOLUTIONS = {(1536, 120.0): "lowres", (3072, 120.0): "hires"}

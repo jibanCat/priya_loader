@@ -23,16 +23,21 @@ from __future__ import annotations
 import numpy as np
 
 # --- internal base units (cgs) ------------------------------------------------
-UNIT_LENGTH_IN_CM = 3.085678e21    # 1 kpc/h
-UNIT_MASS_IN_G = 1.989e43          # 1e10 Msun/h
-UNIT_VELOCITY_IN_CM_S = 1.0e5      # 1 km/s
+# MP-Gadget defaults @ commit 471711f8. Each has a GenIC writer default and a
+# Gadget reader default; both agree:
+UNIT_LENGTH_IN_CM = 3.085678e21    # 1 kpc/h  (genic/params.c:65; libgadget/petaio.c:501)
+UNIT_MASS_IN_G = 1.989e43          # 1e10 Msun/h (genic/params.c:66; petaio.c:502)
+UNIT_VELOCITY_IN_CM_S = 1.0e5      # 1 km/s   (genic/params.c:64; petaio.c:500)
 
 # --- handy derived constants --------------------------------------------------
 KPC_PER_MPC = 1000.0
 MPC_IN_CM = UNIT_LENGTH_IN_CM * KPC_PER_MPC   # 3.085678e24 cm = 1 Mpc/h
 
-#: Critical density today in internal units, rho_crit,0 = 3 H0^2 / (8 pi G),
-#: expressed as (1e10 Msun/h) / (Mpc/h)^3. Used for particle masses.
+#: Critical density today, rho_crit,0 = 3 H0^2 / (8 pi G), in
+#: (1e10 Msun/h) / (Mpc/h)^3. Used for particle masses. This is the textbook
+#: value; MP-Gadget computes it at runtime (libgadget/cosmology.c:21, with
+#: G=6.672e-8, H=3.2407789e-18 @ 471711f8) and gets 27.755 -- they agree to
+#: ~5 sig figs (the difference is MP-Gadget's older value of G).
 RHO_CRIT_1E10_MSUN_H = 27.7537
 
 
@@ -90,9 +95,13 @@ def velfac(z, omega_m, omega_lambda, hubble):
 def gadget_velocity_to_peculiar_kms(velocity_stored, scale_factor):
     """Physical peculiar velocity [km/s] from the stored GenIC IC velocity.
 
-    ``v_peculiar = u_stored * sqrt(a)`` (the Gadget velocity convention,
-    MP-GenIC ``libgenic/zeldovich.c``). Verified for the IC ``Velocity`` block;
-    re-confirm before reusing on evolved MP-Gadget snapshots.
+    ``v_peculiar = u_stored * sqrt(a)`` (the Gadget velocity convention;
+    ``libgenic/zeldovich.c:201`` ``vel_prefac /= sqrt(TimeIC)`` @ 471711f8).
+
+    **Caveat:** GenIC applies this ``1/sqrt(a)`` ONLY when writing Zel'dovich
+    velocities; if the IC header attr ``UsePeculiarVelocity == 1`` the stored
+    ``Velocity`` is already peculiar km/s and must NOT be multiplied by sqrt(a).
+    Check that attr (the IC loader, PR3) before calling this.
     """
     return velocity_stored * np.sqrt(scale_factor)
 

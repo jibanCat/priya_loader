@@ -37,7 +37,7 @@ __version__ = "0.1.0.dev0"
 
 from . import mesh, units  # noqa: E402
 from .dataset import PriyaDataset, Sample  # noqa: E402
-from .ic import ICField, load_ic_density  # noqa: E402
+from .ic import ICField, load_ic_density, load_ic_particles  # noqa: E402
 from .params import SimParams, parse_sim_name  # noqa: E402
 from .paths import (  # noqa: E402
     SimulationPaths,
@@ -59,6 +59,7 @@ __all__ = [
     # initial conditions
     "ICField",
     "load_ic_density",
+    "load_ic_particles",
     # discovery
     "SimulationPaths",
     "discover_simulations",

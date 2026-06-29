@@ -52,7 +52,7 @@ class Sample:
     meta: Dict[str, Any] = field(default_factory=dict, repr=False)
 
     def as_tuple(self):
-        """Return ``(params, redshift, ic, tau)`` (Roger's requested shape)."""
+        """Return ``(params, redshift, ic, tau)`` (the bare-tuple shape)."""
         return (self.params, self.redshift, self.ic, self.tau)
 
 

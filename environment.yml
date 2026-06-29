@@ -8,10 +8,11 @@
 # matplotlib (tutorials/plots), pytest (tests), and bigfile (the IC path).
 #
 # A flux-only USER on a NERSC login node does NOT need this env — the package
-# core is just numpy + h5py:
-#       pip install priya_loader            # flux fields + .npz reading, no MPI
-#       pip install priya_loader[ic]        # + initial-conditions (adds bigfile)
-#       pip install priya_loader[dev]       # + tests/plots (contributors)
+# core is just numpy + h5py. The package is not on PyPI yet, so install editable
+# from a clone (run from the repo root):
+#       pip install -e .            # flux fields + .npz reading, no MPI
+#       pip install -e ".[ic]"      # + initial-conditions (adds bigfile)
+#       pip install -e ".[dev]"     # + tests/plots (contributors)
 # (An nbodykit-based meshing backend is not yet implemented; only numpy CIC ships.)
 name: priya_loader
 channels:

@@ -37,7 +37,7 @@ MPC_IN_CM = UNIT_LENGTH_IN_CM * KPC_PER_MPC   # 3.085678e24 cm = 1 Mpc/h
 #: (1e10 Msun/h) / (Mpc/h)^3. Used for particle masses. This is the textbook
 #: value; MP-Gadget computes it at runtime (libgadget/cosmology.c:21, with
 #: G=6.672e-8, H=3.2407789e-18 @ 471711f8) and gets 27.755 -- they agree to
-#: ~5 sig figs (the difference is MP-Gadget's older value of G).
+#: ~4 sig figs (rel. diff ~5e-5; the difference is MP-Gadget's older value of G).
 RHO_CRIT_1E10_MSUN_H = 27.7537
 
 
@@ -101,7 +101,7 @@ def gadget_velocity_to_peculiar_kms(velocity_stored, scale_factor):
     **Caveat:** GenIC applies this ``1/sqrt(a)`` ONLY when writing Zel'dovich
     velocities; if the IC header attr ``UsePeculiarVelocity == 1`` the stored
     ``Velocity`` is already peculiar km/s and must NOT be multiplied by sqrt(a).
-    Check that attr (the IC loader, PR3) before calling this.
+    Check that attr in the IC loader before calling this.
     """
     return velocity_stored * np.sqrt(scale_factor)
 

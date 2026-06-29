@@ -148,3 +148,20 @@ def test_cic_identical_to_nbodykit():
                     compensated=False, interlaced=False)
     theirs = np.asarray(m.compute(mode="real")) - 1.0   # nbodykit paints 1+delta
     np.testing.assert_allclose(ours, theirs, atol=1e-6)
+
+
+def test_cic_identical_to_pylians():
+    """Our CIC == Pylians (MAS_library) CIC, an independent third-party reference.
+    Agreement is to Pylians' float32 accumulation roundoff (a convention/origin
+    mismatch would be O(1)). Auto-skips where Pylians isn't installed."""
+    MASL = pytest.importorskip("MAS_library")
+    rng = np.random.RandomState(11)
+    box, grid = 120.0, 32
+    pos = rng.uniform(0, box, size=(20000, 3)).astype(np.float32)
+    ours_rho = mesh.cic_paint(pos.astype(np.float64), grid, boxsize=box)
+    ours = ours_rho / ours_rho.mean() - 1.0
+    pyl = np.zeros((grid, grid, grid), dtype=np.float32)
+    MASL.MA(pos, pyl, box, "CIC")
+    theirs = pyl / pyl.mean() - 1.0
+    assert abs(ours_rho.sum() - len(pos)) < 1e-3            # mass conserved
+    np.testing.assert_allclose(ours, theirs, atol=5e-5)     # == to float32 roundoff

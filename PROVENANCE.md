@@ -11,7 +11,7 @@ against the real data. Pinned commits below:
 | [lya_emulator](https://github.com/sbird/lya_emulator) | `27dac4f6c89b9126e141ed58316aff613d311c4f` (master) | 2025-10-24 |
 | [SimulationRunner](https://github.com/sbird/SimulationRunner) | `5adf4fe25ea7c376394327b47da481f663466788` (master) | 2025-09-22 |
 
-Detailed per-claim notes (with quoted code) are in `dev_private/references/04-06`
+Detailed per-claim notes (with quoted code) are in `dev_private/references/01-07`
 (not committed). Line numbers are from the pinned commits.
 
 ## `units.py` — MP-Gadget internal units (@ 471711f8)
@@ -22,7 +22,7 @@ Detailed per-claim notes (with quoted code) are in `dev_private/references/04-06
 | `UNIT_MASS_IN_G = 1.989e43` (1e10 Msun/h) | `genic/params.c:66`; `libgadget/petaio.c:502` |
 | `UNIT_VELOCITY_IN_CM_S = 1e5` (1 km/s) | `genic/params.c:64`; `libgadget/petaio.c:500` |
 | `v_pec = u_stored * sqrt(a)` | `libgenic/zeldovich.c:201` `vel_prefac /= sqrt(GenicConfig.TimeIC)`. **Caveat:** skipped when header `UsePeculiarVelocity == 1` (then Velocity is already peculiar km/s). |
-| `RHO_CRIT_1E10_MSUN_H = 27.7537` | Derived: `3 H0^2/(8 pi G)`. MP-Gadget computes it at `libgadget/cosmology.c:21` (with `G=6.672e-8`, `H=3.2407789e-18`, `physconst.h`) → `27.755`; agrees with the textbook `27.7537` to ~5 sig figs. |
+| `RHO_CRIT_1E10_MSUN_H = 27.7537` | Derived: `3 H0^2/(8 pi G)`. MP-Gadget computes it at `libgadget/cosmology.c:21` (with `G=6.672e-8`, `H=3.2407789e-18`, `physconst.h`) → `27.755`; agrees with the textbook `27.7537` to ~4 sig figs (rel. diff ~5e-5). |
 | particle mass `Omega * RHO_CRIT * box^3 / Ngrid^3` | `libgenic/save.c:106` (CDM), `:96` (gas) |
 
 ## `params.py` / `paths.py` / `runconfig.py` — naming & parameters

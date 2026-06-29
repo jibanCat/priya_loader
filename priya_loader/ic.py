@@ -63,8 +63,8 @@ Provenance (see PROVENANCE.md)
 * ``Position`` = Lagrangian grid ``q`` + 1LPT Zel'dovich displacement ``Psi``
   (``libgenic/zeldovich.c:243-244`` ``Pos += Disp``; written ``save.c:73``;
   MP-Gadget @ 471711f8). First order only — no 2LPT.
-* The native ``ICDensity`` block (which we do NOT read) is the **linear density
-  contrast delta_1** on the Lagrangian grid (= white noise x ``DeltaSpec(k)``,
+* The native ``ICDensity`` block (read by ``field="icdensity"``) is the **linear
+  density contrast delta_1** on the Lagrangian grid (= white noise x ``DeltaSpec(k)``,
   ``zeldovich.c:182,284`` / ``power.c:52-65``; saved ``save.c:72``), with a
   ~1-cell Gaussian smoothing. That is the exact ``delta_1`` a field-level bias
   estimator wants; the CIC-of-``Position`` field here equals it to O(delta^2) at
@@ -108,6 +108,88 @@ class ICField:
     axes: tuple = ("x", "y", "z")
     space: str = "real"          # real space (cf. TauGrid.space == "redshift")
     meta: Dict[str, Any] = field(default_factory=dict, repr=False)
+
+
+def load_ic_particles(
+    ic_dir: StrPath,
+    ptype: str = "dm",
+    columns=("Position",),
+    subsample: int = 1,
+    chunk_size: int = 8_000_000,
+):
+    """Load **raw** IC particle columns — NO meshing — so you can paint with your
+    own CIC (nbodykit / Pylians) or use the positions directly.
+
+    Use this if you want full control of the mass assignment rather than the
+    built-in CIC. (For the linear ``delta_1`` itself you don't need any CIC: use
+    ``load_ic_density(..., field="icdensity")``, which only reshapes the
+    ``ICDensity`` block.)
+
+    Parameters
+    ----------
+    ic_dir, ptype : as :func:`load_ic_density`.
+    columns : tuple of {"Position", "Velocity", "ICDensity", "ID"}
+        Blocks to read. ``Position`` is comoving kpc/h.
+    subsample : int
+        Keep every ``subsample``-th particle (strided, memory-aware). For a full
+        1536^3/3072^3 load prefer a compute node or ``nbodykit.BigFileCatalog``.
+
+    Returns
+    -------
+    (data, header) : (dict[str, np.ndarray], dict)
+        ``data[col]`` arrays; ``header`` has ``box_mpc_h``, ``box_kpc_h``,
+        ``hubble``, ``redshift``.
+    """
+    if ptype not in PTYPE:
+        raise ValueError(f"ptype must be one of {sorted(PTYPE)}; got {ptype!r}")
+    if subsample < 1:
+        raise ValueError(f"subsample must be >= 1; got {subsample}")
+    try:
+        import bigfile
+    except ImportError as e:  # pragma: no cover
+        raise ImportError("reading ICs needs bigfile: pip install priya_loader[ic]") from e
+
+    t = PTYPE[ptype]
+    try:
+        bf = bigfile.File(str(ic_dir))
+    except Exception as e:
+        raise ValueError(f"{ic_dir}: cannot open IC bigfile ({e!r})") from e
+    data = {}
+    with bf:
+        try:
+            attrs = bf["Header"].attrs
+            keys = set(attrs.keys())
+        except Exception as e:
+            raise ValueError(f"{ic_dir}: cannot read IC Header ({e!r}); skeleton/corrupt?") from e
+        box_kpc_h = _attr(attrs, "BoxSize") if "BoxSize" in keys else float("nan")
+        if "Redshift" in keys:
+            redshift = _attr(attrs, "Redshift")
+        elif "Time" in keys:
+            redshift = units.scale_factor_to_redshift(_attr(attrs, "Time"))
+        else:
+            redshift = float("nan")
+        header = {
+            "box_kpc_h": box_kpc_h,
+            "box_mpc_h": units.kpc_h_to_mpc_h(box_kpc_h),
+            "hubble": _attr(attrs, "HubbleParam") if "HubbleParam" in keys else None,
+            "redshift": redshift,
+        }
+        for col in columns:
+            name = f"{t}/{col}"
+            if name not in bf.blocks:
+                raise ValueError(f"{ic_dir}: no '{name}' block (ptype={ptype!r}, column={col!r})")
+            blk = bf[name]
+            n = int(blk.size)
+            if subsample == 1:
+                data[col] = blk[:]
+            else:
+                parts = []
+                for s in range(0, n, chunk_size):
+                    end = min(s + chunk_size, n)
+                    start = (-s) % subsample            # keep global indices == 0 mod subsample
+                    parts.append(blk[s:end][start::subsample])
+                data[col] = np.concatenate(parts) if parts else blk[0:0]
+    return data, header
 
 
 def _icbrt(n: int) -> int:
@@ -238,9 +320,16 @@ def load_ic_density(
         raise ImportError("reading ICs needs bigfile: pip install priya_loader[ic]") from e
 
     t = PTYPE[ptype]
-    with bigfile.File(str(ic_dir)) as bf:        # close the handle (looping is the use case)
-        attrs = bf["Header"].attrs
-        keys = set(attrs.keys())
+    try:
+        bf = bigfile.File(str(ic_dir))
+    except Exception as e:   # not a bigfile / unreadable dir
+        raise ValueError(f"{ic_dir}: cannot open IC bigfile ({e!r})") from e
+    with bf:                                     # close the handle (looping is the use case)
+        try:
+            attrs = bf["Header"].attrs
+            keys = set(attrs.keys())
+        except Exception as e:   # skeleton/mid-transfer IC: Header has no data
+            raise ValueError(f"{ic_dir}: cannot read IC Header ({e!r}); skeleton/corrupt?") from e
         if "BoxSize" not in keys:
             raise ValueError(f"{ic_dir}: Header has no BoxSize")
         box_kpc_h = _attr(attrs, "BoxSize")

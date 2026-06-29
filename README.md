@@ -43,9 +43,12 @@ folder that fails parameter validation is skipped with a warning.
 
 ## Install
 
-Lightweight (flux fields + exported `.npz`; runs on a NERSC login node, no MPI):
+Not on PyPI yet — clone and install editable. Lightweight core (flux fields +
+exported `.npz`; runs on a NERSC login node, no MPI):
 
 ```bash
+git clone https://github.com/jibanCat/priya_loader.git
+cd priya_loader
 pip install -e .            # core = numpy + h5py only
 ```
 
@@ -160,7 +163,9 @@ handled for you in `SimParams.from_dir`.
 
 **Simulations.** `emu_full` is the low-res suite (**1536³ particles, 120 Mpc/h**,
 ~60 simulations); `emu_full_hires` is the high-res suite (**3072³, 120 Mpc/h**).
-Each simulation is one point in a 9-dimensional Latin hypercube:
+Each simulation is one point in a 9-dimensional Latin hypercube. The ranges below
+are **measured from the 60 staged `emu_full` folders** (via `SimParams`), not
+quoted from a paper:
 
 | group | parameter | symbol | range (emu_full) |
 |-------|-----------|--------|------------------|
@@ -172,7 +177,7 @@ Each simulation is one point in a 9-dimensional Latin hypercube:
 | HI reion. | `hireionz` | z_HI | 6.5 – 8.0 |
 | feedback | `bhfeedback` | ε_BH | 0.031 – 0.069 |
 
-**Redshifts.** The forest snapshots span **z ≈ 5.4 → 2.0 in Δz = 0.2 steps**
+**Redshifts.** The forest snapshots span **z ≈ 5.4 → 2.2 in Δz = 0.2 steps**
 (the science range used by the PRIYA flux-power emulator). Snapshot→redshift is
 read from each file's own header (indices are *not* a fixed z map and have gaps),
 so the loader never assumes a redshift from a directory index.

@@ -27,7 +27,7 @@ Two things a downstream (bias) analysis must know, exposed on :class:`TauGrid`:
   an IC density mesh requires this mapping (a wrong transpose biases b_F).
 
 Flux ``F = exp(-tau)`` and ``delta_flux = F/<F> - 1`` are optional derived
-helpers (Roger's pipeline consumes ``tau`` directly).
+helpers (the downstream pipeline consumes ``tau`` directly).
 """
 from __future__ import annotations
 

@@ -240,3 +240,28 @@ def test_icdensity_nmesh_not_divisor_warns(tmp_path):
     p = _make_ic_bigfile(tmp_path / "ic", ngrid=8, with_icdensity=True)
     with pytest.warns(Warning):
         ic.load_ic_density(p, ptype="dm", nmesh=5, field="icdensity")
+
+
+# --- raw particle access (mesh with your own CIC) -----------------------------
+def test_load_ic_particles_returns_raw_columns(tmp_path):
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=8, with_icdensity=True)
+    data, header = ic.load_ic_particles(p, ptype="dm",
+                                        columns=("Position", "ICDensity", "ID"))
+    assert data["Position"].shape == (8 ** 3, 3)
+    assert data["ICDensity"].shape == (8 ** 3,)
+    assert data["ID"].shape == (8 ** 3,)
+    assert 0.0 <= data["Position"].min() and data["Position"].max() < 120000.0  # kpc/h
+    assert header["box_mpc_h"] == pytest.approx(120.0)
+    assert header["redshift"] == pytest.approx(99.0)
+
+
+def test_load_ic_particles_subsample(tmp_path):
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=8)
+    data, _ = ic.load_ic_particles(p, ptype="dm", columns=("Position",), subsample=4)
+    assert data["Position"].shape[0] == 8 ** 3 // 4
+
+
+def test_load_ic_particles_missing_column_raises(tmp_path):
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=8, with_icdensity=False)
+    with pytest.raises(ValueError):
+        ic.load_ic_particles(p, ptype="dm", columns=("ICDensity",))

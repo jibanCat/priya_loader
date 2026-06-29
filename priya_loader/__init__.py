@@ -33,7 +33,8 @@ Design notes for users familiar with the simulations:
 
 __version__ = "0.1.0.dev0"
 
-from . import units  # noqa: E402
+from . import mesh, units  # noqa: E402
+from .ic import ICField, load_ic_density  # noqa: E402
 from .params import SimParams, parse_sim_name  # noqa: E402
 from .paths import (  # noqa: E402
     SimulationPaths,
@@ -48,9 +49,13 @@ from .tau import TauGrid, load_tau_grid, mean_flux, to_delta_flux, to_flux  # no
 __all__ = [
     "__version__",
     "units",
+    "mesh",
     # parameters
     "SimParams",
     "parse_sim_name",
+    # initial conditions
+    "ICField",
+    "load_ic_density",
     # discovery
     "SimulationPaths",
     "discover_simulations",

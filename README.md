@@ -18,7 +18,22 @@ simulation/redshift and yields, per snapshot:
 [ SimParams, redshift, ic_density_3d, tau_3d ]
 ```
 
-so a downstream pipeline (e.g. a JAX bias-estimation code) can `np.load` and go.
+so a downstream pipeline (e.g. a JAX bias-estimation code) can `np.load` and go:
+
+```python
+from priya_loader import PriyaDataset
+
+ds = PriyaDataset("/path/to/priya/emu_full", fidelity="lowres", ic_nmesh=256, flux_axis=1)
+for s in ds:                       # lazy: one (sim, redshift) in memory at a time
+    s.params, s.redshift, s.ic, s.tau     # SimParams, float, (nmesh³) δ, (480,480,nbins) τ
+    # ... or s.as_tuple() -> (params, redshift, ic, tau)
+
+ds.export("out/")                  # one .npz per (sim, z) for the JAX pipeline
+```
+
+It degrades gracefully on partial/mid-transfer data: sims with no staged `tau`
+are skipped, a missing production IC yields `ic=None` (τ-only samples), and a
+folder that fails parameter validation is skipped with a warning.
 
 > **Status.** This version ships the building blocks (`units`, `params`,
 > `runconfig`, `paths`), the Lyman-α `tau` loader (`load_tau_grid`), **and the IC

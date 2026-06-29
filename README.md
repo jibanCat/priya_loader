@@ -20,9 +20,9 @@ simulation/redshift and yields, per snapshot:
 
 so a downstream pipeline (e.g. a JAX bias-estimation code) can `np.load` and go.
 
-> **Status — foundation release.** This version ships the building blocks
-> (`units`, `params`, `runconfig`, `paths`). The flux loader, IC loader, and the
-> `PriyaDataset` orchestrator land in subsequent releases.
+> **Status.** This version ships the building blocks (`units`, `params`,
+> `runconfig`, `paths`) **plus the Lyman-α `tau` loader** (`load_tau_grid`). The
+> IC density loader and the `PriyaDataset` orchestrator land in subsequent releases.
 
 ## Install
 
@@ -70,6 +70,25 @@ for sim in paths.discover_simulations(ROOT):
 count, so `npart=1536` means a 1536³ run. `box` (Mpc/h) and `npart` come from the
 authoritative run files, with the source of each recorded on the `RunConfig`
 (`box_source="_genic_params.ini"`, `ngrid_source="mpgadget.param"`).
+
+### Loading the Lyman-α optical depth
+
+```python
+from priya_loader import load_tau_grid, to_flux
+
+snap, path = tau_files[0]
+g = load_tau_grid(path, axis=1)   # axis 1=x, 2=y, 3=z; reads ~1.5 GB float32 (one axis)
+g.tau            # (480, 480, nbins) RAW optical depth, redshift-space (LOS = last/velocity axis)
+g.redshift       # from the file header
+g.cube_axes      # ('y','z','x') for axis=1 — physical coord of each cube index (LOS last)
+flux = to_flux(g.tau)            # exp(-tau); allocates another ~1.5 GB
+```
+
+`tau` is returned **exactly as stored** (no mean-flux/τ₀ rescaling). The cube is
+**anisotropic**: 250 ckpc/h transverse (`box/480`) vs ~70 ckpc/h along the LOS
+(`box/nbins`), and the LOS pixel is ≈10 km/s (`g.meta["dv_kms"]`). Each axis cube
+is ~1.5 GB (`230 400 × nbins` float32); the loader reads **one axis at a time** so
+it fits a NERSC login node — all three axes would be ~4.6 GB.
 
 ### Why a `runconfig` module?
 
@@ -128,7 +147,20 @@ pip install -e ".[dev]"
 pytest                      # hermetic: no real data or network required
 ```
 
-Tests use synthetic fixtures only, so they run anywhere.
+Tests use synthetic fixtures only, so they run anywhere. Tests marked `realdata`
+(which load genuine multi-GB `grid_480` files) are **auto-skipped** unless you
+point at a staged tree:
+
+```bash
+PRIYA_DATA_ROOT=/path/to/priya/emu_full pytest -m realdata
+```
+
+## Provenance
+
+Every non-obvious convention this package encodes — the MP-Gadget unit constants,
+the `Ap` amplitude pivot, the simulation folder-name format, and the
+`fake_spectra` tau layout / axis ordering — is traced to its upstream source
+(repo, file:line, pinned commit) in [PROVENANCE.md](PROVENANCE.md).
 
 ## License
 

@@ -1,0 +1,57 @@
+# Provenance — sources for the conventions this package relies on
+
+Every non-obvious factual claim in the code is traced here to an upstream source
+(repository, file:line, pinned commit) or to an explicit empirical verification
+against the real data. Pinned commits below:
+
+| upstream | commit / tag | as of |
+|---|---|---|
+| [MP-Gadget](https://github.com/MP-Gadget/MP-Gadget) | `471711f80daa262f68a2d6873bdc3fe471a631da` (master; no tags) | 2026-06-19 |
+| [fake_spectra](https://github.com/sbird/fake_spectra) | `93d0e509c13363b2e5c34db294661d658de2f81b` (tag `v2.2.3`; installed) | — |
+| [lya_emulator](https://github.com/sbird/lya_emulator) | `27dac4f6c89b9126e141ed58316aff613d311c4f` (master) | 2025-10-24 |
+| [SimulationRunner](https://github.com/sbird/SimulationRunner) | `5adf4fe25ea7c376394327b47da481f663466788` (master) | 2025-09-22 |
+
+Detailed per-claim notes (with quoted code) are in `dev_private/references/04-06`
+(not committed). Line numbers are from the pinned commits.
+
+## `units.py` — MP-Gadget internal units (@ 471711f8)
+
+| claim | source |
+|---|---|
+| `UNIT_LENGTH_IN_CM = 3.085678e21` (1 kpc/h) | `genic/params.c:65` (default `CM_PER_MPC/1000`); reader `libgadget/petaio.c:501` (literal) |
+| `UNIT_MASS_IN_G = 1.989e43` (1e10 Msun/h) | `genic/params.c:66`; `libgadget/petaio.c:502` |
+| `UNIT_VELOCITY_IN_CM_S = 1e5` (1 km/s) | `genic/params.c:64`; `libgadget/petaio.c:500` |
+| `v_pec = u_stored * sqrt(a)` | `libgenic/zeldovich.c:201` `vel_prefac /= sqrt(GenicConfig.TimeIC)`. **Caveat:** skipped when header `UsePeculiarVelocity == 1` (then Velocity is already peculiar km/s). |
+| `RHO_CRIT_1E10_MSUN_H = 27.7537` | Derived: `3 H0^2/(8 pi G)`. MP-Gadget computes it at `libgadget/cosmology.c:21` (with `G=6.672e-8`, `H=3.2407789e-18`, `physconst.h`) → `27.755`; agrees with the textbook `27.7537` to ~5 sig figs. |
+| particle mass `Omega * RHO_CRIT * box^3 / Ngrid^3` | `libgenic/save.c:106` (CDM), `:96` (gas) |
+
+## `params.py` / `paths.py` / `runconfig.py` — naming & parameters
+
+| claim | source |
+|---|---|
+| Folder name = `<name><value>` concatenation, `"%.3g"` | `lyaemu/coarse_grid.py:106-118` `build_dirname` @ 27dac4f |
+| Parameter order `ns, Ap, herei, heref, alphaq, hub, omegamh2, hireionz, bhfeedback` | `lyaemu/coarse_grid.py:41` `param_names` @ 27dac4f |
+| `Ap = scalar_amp * ((2π/8)/0.05)^(ns−1)` (Ap = A at 8 Mpc/h ≈ k 0.785; scalar_amp = A_s at k=0.05) | `lyaemu/coarse_grid.py:154-157, 259-265` @ 27dac4f (the literal "0.78" in the name is the code's rounding of `2π/8`) |
+| `SimulationICs.json` `box`/`npart` unreliable | `SimulationRunner simulationics.py:267-285` @ 5adf4fe — `txt_description()` snapshots `__dict__` once at IC-build and is not rewritten when GenIC is regenerated. (`box`/`npart` are required args, *not* defaults; the `15`/`192` values came from the generating script.) Empirically: 30/60 emu_full JSONs read `box=15, npart=192` while the run is 120/1536. |
+| IC dir name `<box>_<Ngrid>_<z_init>` (e.g. `120_1536_99`) | GenIC `FileBase`, SimulationRunner `mpgenic.ini` @ 5adf4fe |
+| Production box/Ngrid from `mpgadget.param`/`_genic_params.ini` | MP-Gadget / MP-GenIC parameter files |
+
+## `tau.py` — fake_spectra gridded product (@ v2.2.3, 93d0e509)
+
+| claim | source |
+|---|---|
+| tau key `tau/<elem>/<ion>/<lambda>` = `H/1/1215` (HI Lyα) | `spectra.py:332-350` (`_save_multihash`); line value `int(1215.67)=1215` |
+| 3-axis grid: `Nlos = 3·ngrid²`, axis 1/2/3 blocks contiguous | `griddedspectra.py:34-60` (3-axis mode) |
+| **`CUBE_AXES` mapping** axis1→(y,z,x), axis2→(x,z,y), axis3→(x,y,z), lower-numbered transverse coord = slow/outer index | `griddedspectra.py:42-60`: `grid_id = [0,nn,mm]/[nn,0,mm]/[nn,mm,0]`, `for nn ... for mm` (C-order). **Also verified empirically** against `spectra/cofm` for all 3 axes (held LOS coord = 0; `box/ngrid` = 250 ckpc/h spacing). |
+| tau is **redshift-space** (LOS = velocity axis) | `absorption.cpp:234` `vel = velfac*pos1 + pvel` (Hubble + peculiar), binned in velocity |
+| transverse spacing `dx = box/ngrid` | `griddedspectra.py:58` `dx = self.box/nspec` (250 ckpc/h is the PRIYA value, not a constant) |
+| pixel `dv ≈ res` (~10 km/s) | `spectra.py` `dvbin = vmax/int(vmax/res)` (≈ `res` up to `int()`; library asserts to `rtol=1e-2`) |
+| `F = exp(-tau)` | `fluxstatistics.py` (mean-flux / `_rescale_mean_flux`) |
+| Header attrs (box ckpc/h, hubble, omegam/b/l, Hz, nbins, redshift) written by fake_spectra | `spectra.py` `save_file` Header writes |
+
+## Notes / discrepancies recorded
+- **ID block ordering** (relevant only to the *native-ICDensity* route, which we do
+  not use): in current MP-Gadget master, DM (type 1) gets the low ID block and gas
+  (type 0) the high block (`genic/main.c:192,198`), the *opposite* of an older
+  GenIC. Mitigation for any future native loader: scatter by ID within each type's
+  own block (subtract that block's `ID.min()`).

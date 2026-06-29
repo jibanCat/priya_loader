@@ -5,19 +5,21 @@ each labelled by a vector of cosmological + astrophysical/thermal parameters.
 This package turns each simulation into clean 3D numpy arrays:
 
   * the **initial-condition (IC) density field** (from the MP-GenIC bigfile ICs,
-    painted onto a mesh), and
-  * the **Lyman-alpha flux field** ``delta_F`` at each output redshift (from the
-    pre-computed gridded ``fake_spectra`` optical-depth files, read with h5py).
+    painted onto a mesh — PLANNED), and
+  * the **Lyman-alpha optical-depth field** ``tau`` at each output redshift (the
+    raw gridded ``fake_spectra`` skewers, read with h5py via
+    :func:`priya_loader.load_tau_grid`). Flux ``F=exp(-tau)`` and
+    ``delta_F=F/<F>-1`` are optional derived helpers.
 
 The headline object (PLANNED, lands in a later PR) is ``PriyaDataset``, which
 will loop over every simulation/redshift and yield, per snapshot, the tuple a
 downstream (e.g. JAX) pipeline wants::
 
-    [ SimParams, redshift, ic_density_3d, flux_3d ]
+    [ SimParams, redshift, ic_density_3d, tau_3d ]
 
-This foundation release ships the building blocks: :mod:`priya_loader.units`,
-:mod:`priya_loader.params`, :mod:`priya_loader.runconfig`, and
-:mod:`priya_loader.paths`.
+This release ships: :mod:`priya_loader.units`, :mod:`priya_loader.params`,
+:mod:`priya_loader.runconfig`, :mod:`priya_loader.paths`, and the tau loader
+:mod:`priya_loader.tau`. The IC loader and ``PriyaDataset`` land later.
 
 Design notes for users familiar with the simulations:
   * Paths are always explicit arguments — nothing is hard-coded. The same code
@@ -31,4 +33,37 @@ Design notes for users familiar with the simulations:
 
 __version__ = "0.1.0.dev0"
 
-__all__ = ["__version__"]
+from . import units  # noqa: E402
+from .params import SimParams, parse_sim_name  # noqa: E402
+from .paths import (  # noqa: E402
+    SimulationPaths,
+    discover_simulations,
+    find_ic_dir,
+    find_production_ic_dir,
+    find_spectra_files,
+)
+from .runconfig import RunConfig, read_run_config  # noqa: E402
+from .tau import TauGrid, load_tau_grid, mean_flux, to_delta_flux, to_flux  # noqa: E402
+
+__all__ = [
+    "__version__",
+    "units",
+    # parameters
+    "SimParams",
+    "parse_sim_name",
+    # discovery
+    "SimulationPaths",
+    "discover_simulations",
+    "find_ic_dir",
+    "find_production_ic_dir",
+    "find_spectra_files",
+    # run config
+    "RunConfig",
+    "read_run_config",
+    # tau / flux
+    "TauGrid",
+    "load_tau_grid",
+    "to_flux",
+    "mean_flux",
+    "to_delta_flux",
+]

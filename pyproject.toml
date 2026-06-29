@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "priya_loader"
+dynamic = ["version"]                         # single-sourced from priya_loader.__version__
+description = "ML-friendly loader for the PRIYA MP-Gadget Lyman-alpha simulation suite: initial-condition density and Lyman-alpha flux fields as 3D numpy arrays."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "Ming-Feng Ho", email = "mfho@umich.edu" }]
+keywords = ["lyman-alpha", "cosmology", "simulations", "MP-Gadget", "machine-learning"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Astronomy",
+]
+
+# Core deps are intentionally MINIMAL so the flux path + .npz reading run on a
+# NERSC login node with no heavy/MPI dependencies. bigfile is an extra (only the
+# IC path needs it); nbodykit is NOT a pip extra (see note below).
+dependencies = [
+    "numpy>=1.21",
+    "h5py>=3.0",
+]
+
+[project.optional-dependencies]
+ic = ["bigfile"]               # initial-conditions reading (particle bigfiles)
+plots = ["matplotlib"]
+dev = ["pytest>=7", "matplotlib", "bigfile"]
+# NOTE: nbodykit is an *optional* alternative meshing backend but is intentionally
+# NOT listed as a pip extra — it is unmaintained and usually fails to `pip install`
+# on modern Python. Install it manually (conda-forge) if you want backend="nbodykit".
+
+[project.urls]
+Repository = "https://github.com/jibanCat/priya_loader"
+Issues = "https://github.com/jibanCat/priya_loader/issues"
+
+[tool.setuptools.dynamic]
+version = { attr = "priya_loader.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["priya_loader*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "realdata: requires the real PRIYA data tree on disk (auto-skipped if absent)",
+    "needs_bigfile: requires the optional bigfile dependency (auto-skipped if absent)",
+]

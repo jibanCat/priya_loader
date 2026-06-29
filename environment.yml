@@ -1,0 +1,27 @@
+# Full CONTRIBUTOR / development environment for priya_loader.
+#
+#   conda env create -f environment.yml
+#   conda activate priya_loader
+#   pip install -e .            # editable install of this package
+#
+# This env is deliberately heavier than the runtime requirements: it includes
+# matplotlib (tutorials/plots), pytest (tests), and bigfile (the IC path).
+#
+# A flux-only USER on a NERSC login node does NOT need this env — the package
+# core is just numpy + h5py:
+#       pip install priya_loader            # flux fields + .npz reading, no MPI
+#       pip install priya_loader[ic]        # + initial-conditions (adds bigfile)
+#       pip install priya_loader[dev]       # + tests/plots (contributors)
+# `nbodykit` (optional alt meshing backend) is installed manually via conda-forge.
+name: priya_loader
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.9
+  - numpy>=1.21
+  - h5py>=3.0
+  - matplotlib
+  - pytest>=7
+  - pip
+  - pip:
+      - bigfile

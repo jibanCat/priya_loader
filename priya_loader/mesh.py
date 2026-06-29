@@ -2,10 +2,17 @@
 
 Deposits particle positions onto a periodic ``nmesh^3`` grid. Designed to be fed
 in **chunks** (accumulate into a preallocated ``out`` array) so a huge particle
-load never has to be resident in memory at once — the peak footprint is the mesh
-plus one chunk. This is the lightweight default backend for the IC loader (an
-optional ``nbodykit`` backend can be added later); it needs no MPI and runs on a
-NERSC login node.
+load never has to be resident at once. Peak memory is ``~2 * nmesh^3`` float64
+(the persistent grid + one transient ``bincount`` array; the 8 corner bincounts
+are sequential, not simultaneous) plus one chunk's working set (``~120 B *
+chunk_size``). Recommended ``nmesh <= 512`` on a NERSC login node
+(512^3 ~ 2 GiB, 1024^3 ~ 16 GiB). It needs no MPI.
+
+The result is a **raw, uncompensated** CIC field: it carries the CIC window
+``W(k) = prod sinc^2(pi k_i / k_Ny)``. For a finite-k cross-spectrum (e.g. IC x
+flux for the bias), deconvolve ``sinc^2`` before use; at ``k -> 0`` the window
+-> 1. (Shipping raw is the deliberate design; an optional ``nbodykit`` /
+compensated backend can be added later.)
 
 CIC weighting: each particle contributes to the 8 nearest cells with weights
 ``(1-d)`` / ``d`` per axis (``d`` = fractional offset from the lower cell),
@@ -48,8 +55,15 @@ def cic_paint(
     ndarray
         The (accumulated) mass grid, float64.
     """
+    if nmesh < 1:
+        raise ValueError(f"nmesh must be >= 1; got {nmesh}")
     if out is None:
         out = np.zeros((nmesh, nmesh, nmesh), dtype=np.float64)
+    else:
+        if out.shape != (nmesh, nmesh, nmesh):
+            raise ValueError(f"out shape {out.shape} != ({nmesh},)*3")
+        if out.dtype != np.float64:
+            raise TypeError(f"out must be float64 (got {out.dtype}) to avoid precision loss")
     pos = np.asarray(positions, dtype=np.float64)
     if pos.ndim != 2 or pos.shape[1] != 3:
         raise ValueError(f"positions must have shape (N, 3); got {pos.shape}")

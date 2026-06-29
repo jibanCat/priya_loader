@@ -5,7 +5,7 @@ each labelled by a vector of cosmological + astrophysical/thermal parameters.
 This package turns each simulation into clean 3D numpy arrays:
 
   * the **initial-condition (IC) density field** (from the MP-GenIC bigfile ICs,
-    painted onto a mesh — PLANNED), and
+    streamed and painted onto a mesh via :func:`priya_loader.load_ic_density`), and
   * the **Lyman-alpha optical-depth field** ``tau`` at each output redshift (the
     raw gridded ``fake_spectra`` skewers, read with h5py via
     :func:`priya_loader.load_tau_grid`). Flux ``F=exp(-tau)`` and
@@ -18,8 +18,10 @@ downstream (e.g. JAX) pipeline wants::
     [ SimParams, redshift, ic_density_3d, tau_3d ]
 
 This release ships: :mod:`priya_loader.units`, :mod:`priya_loader.params`,
-:mod:`priya_loader.runconfig`, :mod:`priya_loader.paths`, and the tau loader
-:mod:`priya_loader.tau`. The IC loader and ``PriyaDataset`` land later.
+:mod:`priya_loader.runconfig`, :mod:`priya_loader.paths`, the tau loader
+:mod:`priya_loader.tau`, and the IC density loader
+:mod:`priya_loader.ic` (+ :mod:`priya_loader.mesh`). The ``PriyaDataset``
+orchestrator that ties them into the ``[params, z, ic, tau]`` tuple lands later.
 
 Design notes for users familiar with the simulations:
   * Paths are always explicit arguments — nothing is hard-coded. The same code

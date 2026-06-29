@@ -36,6 +36,15 @@ Detailed per-claim notes (with quoted code) are in `dev_private/references/04-06
 | IC dir name `<box>_<Ngrid>_<z_init>` (e.g. `120_1536_99`) | GenIC `FileBase`, SimulationRunner `mpgenic.ini` @ 5adf4fe |
 | Production box/Ngrid from `mpgadget.param`/`_genic_params.ini` | MP-Gadget / MP-GenIC parameter files |
 
+## `ic.py` / `mesh.py` — IC particle reading (@ MP-Gadget 471711f8)
+
+| claim | source |
+|---|---|
+| particle type `0 = gas`, `1 = DM` (bigfile block prefix) | MP-Gadget / MP-GenIC particle-type convention (`libgenic/save.c`) |
+| `Position` is comoving kpc/h in `[0, BoxSize)` | `genic/params.c:65` (UnitLength = kpc/h); positions written by `libgenic/save.c` |
+| IC `Position` are LPT/Zel'dovich-displaced particles (not the native linear `ICDensity` block) | `libgenic/zeldovich.c` (displacement); `ICDensity` is a separate per-particle block |
+| CIC overdensity `δ=ρ/⟨ρ⟩−1`; raw (uncompensated) window `sinc²` | standard cloud-in-cell (ref `03_bigfile_ic_units.md` §5.2) |
+
 ## `tau.py` — fake_spectra gridded product (@ v2.2.3, 93d0e509)
 
 | claim | source |

@@ -76,3 +76,27 @@ def test_overdensity_clustered_is_positive_where_clustered():
     delta = mesh.to_overdensity(rho)
     assert delta[1, 1, 1] > 10
     assert delta.min() == pytest.approx(-1.0)   # empty cells are delta = -1
+
+
+def test_wrap_at_boxsize_physical_units():
+    # A particle at exactly Position == BoxSize wraps to cell 0 (periodic).
+    rho = mesh.cic_paint(np.array([[120.0, 120.0, 120.0]]), nmesh=4, boxsize=120.0)
+    assert rho[0, 0, 0] == pytest.approx(1.0)
+    assert rho.sum() == pytest.approx(1.0)
+
+
+def test_coarsen_ngrid_gt_nmesh_conserves_mass():
+    # Production path: a fine particle lattice painted onto a coarser mesh.
+    g = (np.arange(16) + 0.5) / 16.0 * 8.0       # 16^3 particles in mesh units [0,8)
+    pos = np.array(np.meshgrid(g, g, g, indexing="ij")).reshape(3, -1).T
+    rho = mesh.cic_paint(pos, nmesh=8)
+    assert rho.sum() == pytest.approx(16 ** 3)
+    assert np.isfinite(mesh.to_overdensity(rho)).all()
+
+
+def test_out_must_be_float64_and_right_shape():
+    pos = np.array([[1.0, 1.0, 1.0]])
+    with pytest.raises((ValueError, TypeError)):
+        mesh.cic_paint(pos, nmesh=4, out=np.zeros((4, 4, 4), dtype=np.float32))
+    with pytest.raises((ValueError, TypeError)):
+        mesh.cic_paint(pos, nmesh=4, out=np.zeros((3, 3, 3), dtype=np.float64))

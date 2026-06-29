@@ -70,8 +70,9 @@ def scale_factor_to_redshift(a):
 def hubble_z(z, omega_m, omega_lambda, hubble):
     """Hubble rate H(z) in km/s/(Mpc/h) for flat LCDM (radiation neglected).
 
-    ``H(z) = 100 h * sqrt(omega_m (1+z)^3 + omega_lambda)``. Needed by the flux
-    loader to set the redshift-space LOS pixel scale.
+    ``H(z) = 100 h * sqrt(omega_m (1+z)^3 + omega_lambda)``. The tau loader uses
+    the authoritative ``Hz`` stored in each file header when present, and this as
+    a fallback to recompute it from cosmology.
     """
     return 100.0 * hubble * np.sqrt(omega_m * (1.0 + z) ** 3 + omega_lambda)
 
@@ -79,7 +80,8 @@ def hubble_z(z, omega_m, omega_lambda, hubble):
 def velfac(z, omega_m, omega_lambda, hubble):
     """Comoving-distance -> peculiar-velocity factor ``H(z) / (h (1+z))``.
 
-    Sets the km/s spacing of the Lyman-alpha forest pixels along the LOS.
+    Relates a comoving LOS interval to the km/s spacing of the Lyman-alpha forest
+    pixels (see :mod:`priya_loader.tau` for how the pixel ``dv_kms`` is derived).
     """
     return hubble_z(z, omega_m, omega_lambda, hubble) / (hubble * (1.0 + z))
 

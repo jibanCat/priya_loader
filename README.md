@@ -122,8 +122,21 @@ The IC density is the **Eulerian CIC field of the displaced particles** at
 (the consumer) handle: the growth rescale `D(z_flux)/D(z_init)`, the `sinc²` CIC
 deconvolution, co-registering to the τ cube's `cube_axes` at `nmesh=480`
 transverse (the τ LOS is a redshift-space velocity axis — resample it separately),
-and the mean-flux normalization. Peak memory ≈ `2·nmesh³` float64 + one chunk
-(use `nmesh ≤ 512` on a login node). `bigfile` is required (`pip install -e ".[ic]"`).
+and the mean-flux normalization. `bigfile` is required (`pip install -e ".[ic]"`).
+
+**IC memory vs `nmesh`** (one τ axis ≈ 1.46 GB; reading `Position` is I/O-bound:
+81 GB/type at 1536³, 648 GB/type at 3072³):
+
+| `nmesh` | IC paint peak | IC δ (f4) | per-sample (δ+τ) | login node? |
+|--------:|--------------:|----------:|-----------------:|:-----------:|
+| 256 | 1.3 GB | 0.06 GB | 1.5 GB | ✅ |
+| 480 | 2.7 GB | 0.41 GB | 1.9 GB | ✅ (matches τ transverse) |
+| 512 | 3.0 GB | 0.50 GB | 2.0 GB | ✅ |
+| 1024 | 17 GB | 4.0 GB | 5.5 GB | ⚠️ tight |
+| 1536 | 55 GB | 13.5 GB | 15.0 GB | ❌ batch node |
+
+Peak ≈ `2·nmesh³` float64 (mesh + one transient bincount) + ~1 GB chunk; **use
+`nmesh ≤ 512` on a login node** (or `480` to match the τ transverse grid).
 
 ### Why a `runconfig` module?
 

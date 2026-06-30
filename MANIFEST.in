@@ -1,0 +1,7 @@
+include README.md
+include PROVENANCE.md
+include LICENSE
+include conftest.py
+include environment.yml
+recursive-include notebooks *.ipynb
+recursive-include tests *.py

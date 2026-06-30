@@ -36,6 +36,10 @@ It degrades gracefully on partial/mid-transfer data: sims with no staged `tau`
 are skipped, a missing production IC yields `ic=None` (τ-only samples), and a
 folder that fails parameter validation is skipped with a warning.
 
+📓 **Tutorial:** [`notebooks/quickstart.ipynb`](notebooks/quickstart.ipynb) walks
+through params → τ → IC (all three paths) → `PriyaDataset` → `.npz` export, end to
+end. It runs anywhere (tiny synthetic fixtures, no multi-GB data needed).
+
 > **Status.** This version ships the full stack: the building blocks (`units`,
 > `params`, `runconfig`, `paths`), the Lyman-α `tau` loader (`load_tau_grid`), the
 > IC density loader (`load_ic_density`), **and the `PriyaDataset` orchestrator**

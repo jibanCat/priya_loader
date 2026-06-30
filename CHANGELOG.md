@@ -9,12 +9,18 @@ All notable changes to `priya_loader`. Format loosely follows
 - `tests/test_real_ic.py` — real-IC verification, gated behind `PRIYA_REAL_IC`
   (skips by default). Codifies the NERSC sign-off the synthetic fixtures can't
   reach: resolution/box invariants, the linear `δ₁` (`icdensity`) and Eulerian
-  `cic` sanity, **CIC bit-equivalence vs Pylians and nbodykit on real particle
-  positions**, and `icdensity`↔`cic` consistency at z≈99.
+  `cic` sanity, **CIC equivalence on real particle positions** — against a built-in
+  dependency-free reference (runs unconditionally) plus optional Pylians (in a
+  `numpy<2` env) and nbodykit cross-checks — and `icdensity`↔`cic` consistency at
+  z≈99. Verified on NERSC against the staged **512³** low-res companion
+  (`120_512_99`) and the **3072³** hi-res IC; the 1536³ low-res grid referenced in
+  older notes is not staged there.
 
 ### Changed
-- `notebooks/quickstart.ipynb` is now driven entirely by the **real** staged
-  suite (no synthetic fixtures); IC figures are the NERSC job.
+- `notebooks/quickstart.ipynb` rewritten as a step-by-step **pedagogical** tutorial
+  for users new to MP-Gadget: it defaults to the staged NERSC PRIYA path, makes
+  explicit that the low-res ICs are **512³**, and walks through loader usage plus
+  simple matplotlib visualizations of the parameters, τ/flux fields, and IC density.
 
 ## [0.1.0] — 2026-06-29
 

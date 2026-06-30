@@ -11,13 +11,22 @@ coordinates, real periodic box, real Lagrangian ``ID``/``ICDensity`` blocks).
 
 Run on NERSC, e.g.::
 
-    PRIYA_REAL_IC=/scratch/.../<sim>/ICS/120_1536_99 \\
+    PRIYA_REAL_IC=/global/cfs/cdirs/.../<sim>/ICS/120_512_99 \\
         pytest tests/test_real_ic.py -v
 
-Then repeat for a hires sim (``ICS/120_3072_99``). Optional:
-``PRIYA_REAL_IC_SUBSAMPLE`` (default 4000) bounds the particle load for the
-CIC-comparison tests; the CIC painter is additive per particle, so equivalence on
-a strided subsample implies equivalence on the full set (and keeps RAM bounded).
+The staged PRIYA low-res IC is the **512^3** companion ``120_512_99`` (the 1536^3
+production grid is not staged on NERSC); the hi-res IC is ``120_3072_99`` (+ a
+``120_1024_99`` companion). For a hi-res target run the resolution/box test only —
+it reads no particles; the full-block fixtures self-skip above 1536^3 (override
+with ``PRIYA_REAL_IC_ALLOW_HEAVY=1`` on a compute node).
+
+The built-in-CIC-vs-explicit-reference check runs with **no optional dependency**,
+so the convention/origin/transpose guarantee is verified on the default stack and
+is never silently skipped. The Pylians/nbodykit checks are *extra* cross-checks and
+additionally need those libraries (Pylians builds only in a ``numpy<2`` env).
+Optional ``PRIYA_REAL_IC_SUBSAMPLE`` (default 4000) bounds the particle load; the
+CIC painter is additive per particle, so equivalence on a strided subsample implies
+equivalence on the full set (and keeps RAM bounded).
 
 Heavy loads (one full IC stream per mesh) are shared via module-scoped fixtures.
 """
@@ -27,13 +36,14 @@ import numpy as np
 import pytest
 
 from priya_loader import load_ic_density, load_ic_particles, mesh
+from test_mesh import _explicit_cic   # reuse the transparent, dependency-free CIC reference
 
 REAL_IC = os.environ.get("PRIYA_REAL_IC")
 SUBSAMPLE = int(os.environ.get("PRIYA_REAL_IC_SUBSAMPLE", "4000"))
 BOX_MPC_H = 120.0
 BOX_KPC_H = BOX_MPC_H * 1000.0
-ALLOWED_NGRID = {512, 1536, 3072}   # 512 companion + low-res / hi-res production
-NMESH = 256                          # divides 512, 1536 and 3072
+ALLOWED_NGRID = {512, 1024, 1536, 3072}   # 512/1024 companions + low-res / hi-res production
+NMESH = 256                               # divides 512, 1024, 1536 and 3072
 
 pytestmark = pytest.mark.skipif(
     not REAL_IC,
@@ -50,11 +60,32 @@ def _cube_root(n):
     raise AssertionError(f"{n} particles is not a perfect cube (Ngrid^3)")
 
 
+def _ngrid_from_header():
+    """Ngrid from the IC Header (reads only the block record count, no particles)."""
+    bigfile = pytest.importorskip("bigfile")
+    with bigfile.File(str(REAL_IC)) as bf:
+        return _cube_root(int(bf["1/Position"].size))
+
+
+def _skip_if_heavy_load():
+    """Refuse to stream a full hi-res Position block by accident. The full-block
+    fixtures read the ENTIRE Position array (``subsample`` strides only in memory),
+    so a 3072^3 target is ~700 GB of I/O — never appropriate on a shared login node.
+    Resolution/box tests don't use these fixtures, so they still run at any Ngrid."""
+    ng = _ngrid_from_header()
+    if ng > 1536 and not os.environ.get("PRIYA_REAL_IC_ALLOW_HEAVY"):
+        pytest.skip(
+            f"Ngrid={ng}: a full-block load is ~{ng ** 3 * 24 / 1e9:.0f} GB of I/O; "
+            "set PRIYA_REAL_IC_ALLOW_HEAVY=1 on a compute node to override"
+        )
+
+
 # --- shared heavy loads -------------------------------------------------------
 @pytest.fixture(scope="module")
 def real_particles():
     """A memory-bounded, strided subsample of the real DM ``Position`` block
     (comoving kpc/h, float64) plus the box in kpc/h."""
+    _skip_if_heavy_load()
     data, header = load_ic_particles(
         REAL_IC, ptype="dm", columns=("Position",), subsample=SUBSAMPLE
     )
@@ -64,19 +95,21 @@ def real_particles():
 @pytest.fixture(scope="module")
 def ic_icdensity():
     """The native linear ``delta_1`` field (``field='icdensity'``), loaded once."""
+    _skip_if_heavy_load()
     return load_ic_density(REAL_IC, ptype="dm", nmesh=NMESH, field="icdensity")
 
 
 @pytest.fixture(scope="module")
 def ic_cic():
     """The Eulerian CIC overdensity (``field='cic'``), loaded once."""
+    _skip_if_heavy_load()
     return load_ic_density(REAL_IC, ptype="dm", nmesh=NMESH, field="cic")
 
 
 # --- resolution / unit invariants (CLAUDE.md hard constraints) ----------------
 def test_real_ic_resolution_and_box_invariants():
-    """npart == Ngrid^3 with Ngrid in {512,1536,3072}, and box == 120 Mpc/h.
-    Reads only the block size + Header (no painting)."""
+    """npart == Ngrid^3 with Ngrid in {512,1024,1536,3072}, and box == 120 Mpc/h.
+    Reads only the block size + Header (no painting) — safe at any resolution."""
     bigfile = pytest.importorskip("bigfile")
     with bigfile.File(str(REAL_IC)) as bf:
         npart = int(bf["1/Position"].size)              # bigfile .size = record count
@@ -118,10 +151,25 @@ def test_real_ic_cic_overdensity_is_physical(ic_cic):
 
 
 # --- CIC bit-equivalence on REAL particles (the headline verification) --------
+def test_real_ic_cic_matches_explicit_reference_on_real_particles(real_particles):
+    """Built-in CIC == the transparent per-particle reference (``test_mesh._explicit_cic``)
+    on REAL Positions. This is the headline convention/origin/transpose guarantee with
+    **no optional dependency**, so — unlike the Pylians/nbodykit cross-checks below — it
+    runs whenever real ICs are staged and is never silently skipped. A bug would be O(1)."""
+    pos, box = real_particles
+    grid = 128
+    chk = pos[:30000]                                   # bound the O(N) python reference
+    ours = mesh.cic_paint(chk, grid, boxsize=box)
+    assert np.isclose(ours.sum(), len(chk))             # mass conserved on real coords
+    ref = _explicit_cic(chk, grid, boxsize=box)
+    np.testing.assert_allclose(ours, ref, atol=1e-9, rtol=0.0)
+
+
 def test_real_ic_cic_matches_pylians_on_real_particles(real_particles):
-    """Built-in numpy CIC == Pylians (MAS_library) CIC on REAL Positions, to
-    float32 accumulation roundoff. A convention/origin/transpose bug would be
-    O(1); this closes the 'synthetic points only' gap. Auto-skips without Pylians."""
+    """Extra cross-check: built-in numpy CIC == Pylians (MAS_library) CIC on REAL
+    Positions, to float32 accumulation roundoff. Auto-skips without Pylians (which
+    builds only in a numpy<2 env); the explicit-reference test above is the
+    dependency-free guarantee. (Pylians MA(...,"CIC") convention pinned in PROVENANCE.md.)"""
     MASL = pytest.importorskip("MAS_library")
     pos, box = real_particles
     grid = 128
@@ -135,8 +183,9 @@ def test_real_ic_cic_matches_pylians_on_real_particles(real_particles):
 
 
 def test_real_ic_cic_matches_nbodykit_on_real_particles(real_particles):
-    """Built-in CIC == nbodykit's UNcompensated, NON-interlaced CIC on REAL
-    Positions (the 'tricks' we deliberately omit). Auto-skips without nbodykit."""
+    """Extra cross-check: built-in CIC == nbodykit's UNcompensated, NON-interlaced
+    CIC on REAL Positions (the 'tricks' we deliberately omit). Auto-skips without
+    nbodykit. (nbodykit to_mesh(compensated=False, interlaced=False) convention pinned in PROVENANCE.md.)"""
     pytest.importorskip("nbodykit")
     from nbodykit.source.catalog import ArrayCatalog
     pos, box = real_particles
@@ -151,11 +200,14 @@ def test_real_ic_cic_matches_nbodykit_on_real_particles(real_particles):
 
 # --- consistency of the two IC routes -----------------------------------------
 def test_real_ic_icdensity_and_cic_trace_same_structure(ic_icdensity, ic_cic):
-    """At z_init~99 the Zel'dovich displacements are tiny, so the linear
+    """At z_init~99 the Zel'dovich displacements are sub-cell, so the linear
     (icdensity) and Eulerian (cic) fields trace the same structure -> strongly
     correlated. Guards against a mis-mapped Lagrangian index in the icdensity
-    route (which would decorrelate them)."""
+    route (which would decorrelate them). 0.5 was only a loose anti-transpose
+    guard; at z~99 the true correlation should be >~ 0.9, so we log r and require
+    a tight floor."""
     a = (ic_icdensity.delta - ic_icdensity.delta.mean()).ravel()
     b = (ic_cic.delta - ic_cic.delta.mean()).ravel()
     r = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
-    assert r > 0.5, f"linear vs CIC correlation unexpectedly low: r={r:.3f}"
+    print(f"[icdensity<->cic] z~99 correlation r = {r:.4f}")
+    assert r > 0.8, f"linear vs CIC correlation unexpectedly low: r={r:.3f}"

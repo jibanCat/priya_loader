@@ -32,9 +32,13 @@ ds.export("out/")                 # one .npz per (sim, z) for the JAX pipeline
    480, so **Fourier-match the common low-`k` modes** (or Fourier-resample your
    512 `δ₁` to 480) — both fields share the box origin (CIC node and `cofm` both at
    `j·box/N`). Real-space `δ₁` × redshift-space τ is the intended Kaiser estimator
-   (gives `b_δ(1+β_F μ²)`); do **not** add RSD to `δ₁`.
-4. **Window**: deconvolve the IC window for finite-`k` work (CIC `sinc²`, or the
-   `icdensity` block-average `sinc`); it → 1 at the low-`k` modes that set `b_F`.
+   (gives `b_δ(1+β_F μ²)`; Kaiser 1987, MNRAS 227, 1; for the Lyα flux form see
+   McDonald 2003, arXiv:astro-ph/0108064 and Slosar et al. 2011, arXiv:1104.5244);
+   do **not** add RSD to `δ₁`.
+4. **Window**: deconvolve the IC window for finite-`k` work (CIC `sinc²(k_iΔ/2)`,
+   Jing 2005 arXiv:astro-ph/0409240; or the `icdensity` block-average `sinc`); it
+   → 1 at the low-`k` modes that set `b_F`. (Pylians/nbodykit CIC conventions are
+   pinned in `PROVENANCE.md`.)
 5. **Flux**: `F = exp(−τ)`, `δ_F = F/F̄ − 1`. Choose `F̄` (raw box mean vs an
    observational/τ₀ target — sets the `b_F` amplitude) and decide on **DLA masking**
    (raw τ keeps saturated `τ>1e6` troughs, which bias large-scale `b_F`).

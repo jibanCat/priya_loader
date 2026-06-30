@@ -78,6 +78,9 @@ def hubble_z(z, omega_m, omega_lambda, hubble):
     ``H(z) = 100 h * sqrt(omega_m (1+z)^3 + omega_lambda)``. The tau loader uses
     the authoritative ``Hz`` stored in each file header when present, and this as
     a fallback to recompute it from cosmology.
+
+    Provenance: standard Friedmann eq. (Dodelson, *Modern Cosmology* §2); this is
+    byte-for-byte the stored fake_spectra ``Hz`` (see PROVENANCE.md, units helpers).
     """
     return 100.0 * hubble * np.sqrt(omega_m * (1.0 + z) ** 3 + omega_lambda)
 
@@ -88,6 +91,9 @@ def growth_factor(z, omega_m, omega_lambda):
     Convenience for rescaling the IC linear ``delta_1`` (at ``z_init~99``) to the
     flux redshift: the bias amplitude needs ``D(z_flux) / D(z_init)``. Uses the
     standard integral ``D(a) ∝ H(a) ∫_0^a da' / (a' H(a'))^3`` (pure numpy).
+
+    Provenance: Eisenstein 1997 (arXiv:astro-ph/9709054); Peebles 1980 *LSS* §10.
+    Radiation is neglected (a small error in ``D(99)``). See PROVENANCE.md.
     """
     def _D(a):
         aa = np.linspace(1e-7, a, 4000)
@@ -105,8 +111,10 @@ def growth_factor(z, omega_m, omega_lambda):
 def growth_rate(z, omega_m, omega_lambda):
     """Linear growth rate ``f(z) = dlnD/dlna ~= Omega_m(z)^0.55`` (flat LCDM).
 
-    The standard gamma=0.55 approximation. (Note: ``f`` is not needed to measure
-    ``beta_F`` from the cross-spectrum mu^2 term — only to decompose ``b_eta``.)
+    The standard gamma=0.55 approximation (Linder 2005, arXiv:astro-ph/0507263).
+    Distinct from GenIC's IC-velocity ``F_Omega ~ Omega(a)^0.6`` (EdS). (Note:
+    ``f`` is not needed to measure ``beta_F`` from the cross-spectrum mu^2 term —
+    only to decompose ``b_eta``.) See PROVENANCE.md.
     """
     a = 1.0 / (1.0 + z)
     omega_m_z = omega_m * a ** -3 / (omega_m * a ** -3 + omega_lambda)
@@ -118,6 +126,9 @@ def velfac(z, omega_m, omega_lambda, hubble):
 
     Relates a comoving LOS interval to the km/s spacing of the Lyman-alpha forest
     pixels (see :mod:`priya_loader.tau` for how the pixel ``dv_kms`` is derived).
+
+    Provenance: same convention as fake_spectra ``vel = velfac*pos + pvel``
+    (``absorption.cpp`` @ v2.2.3). See PROVENANCE.md.
     """
     return hubble_z(z, omega_m, omega_lambda, hubble) / (hubble * (1.0 + z))
 

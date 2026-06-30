@@ -3,6 +3,19 @@
 All notable changes to `priya_loader`. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver.
 
+## [Unreleased]
+
+### Added
+- `tests/test_real_ic.py` — real-IC verification, gated behind `PRIYA_REAL_IC`
+  (skips by default). Codifies the NERSC sign-off the synthetic fixtures can't
+  reach: resolution/box invariants, the linear `δ₁` (`icdensity`) and Eulerian
+  `cic` sanity, **CIC bit-equivalence vs Pylians and nbodykit on real particle
+  positions**, and `icdensity`↔`cic` consistency at z≈99.
+
+### Changed
+- `notebooks/quickstart.ipynb` is now driven entirely by the **real** staged
+  suite (no synthetic fixtures); IC figures are the NERSC job.
+
 ## [0.1.0] — 2026-06-29
 
 First tagged release. ML-friendly access to the PRIYA MP-Gadget Lyman-α suite.

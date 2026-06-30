@@ -18,7 +18,7 @@ for s in ds:                      # lazy: one (sim, z) in memory at a time
 ds.export("out/")                 # one .npz per (sim, z) for the JAX pipeline
 ```
 
-## Recommended path for the bias cross-spectrum `b_F = P_{F,δ₁}/P_{δ₁δ₁}`
+## Recommended path for the bias cross-spectrum `b_F = P_{δ_F,δ₁}/P_{δ₁δ₁}` (flux contrast `δ_F = F/⟨F⟩−1`)
 
 1. **Use the linear `δ₁`**: `ic_field="icdensity"` (the native `ICDensity` block,
    reshaped to the Lagrangian grid) — not the CIC field. `nmesh` **must divide**

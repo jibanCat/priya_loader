@@ -165,7 +165,7 @@ def test_export_npz_roundtrip(tmp_path):
 
 
 def test_ic_field_icdensity_through_dataset(tmp_path):
-    # The headline orchestrator can deliver Roger's linear delta_1.
+    # The headline orchestrator can deliver the linear delta_1 (de Belsunce et al.).
     _make_sim(tmp_path, NAME_A, JSON_A, snaps=(4,))
     s = list(ds.PriyaDataset(tmp_path, ic_nmesh=8, ic_field="icdensity"))[0]
     assert s.meta["ic_meta"]["field"] == "icdensity"

@@ -97,3 +97,29 @@ def test_particle_mass_matches_reference_512():
     m_gas = units.particle_mass(omegab, box_mpc_h=120.0, ngrid=512)
     assert m_dm == pytest.approx(0.0792, rel=1e-2)
     assert m_gas == pytest.approx(0.0144, rel=1e-2)
+
+
+def test_growth_factor_normalized_and_decreasing():
+    om, ol = 0.3, 0.7
+    assert units.growth_factor(0.0, om, ol) == pytest.approx(1.0)
+    assert units.growth_factor(2.0, om, ol) < units.growth_factor(1.0, om, ol) < 1.0
+
+
+def test_growth_factor_matter_domination_scales_as_a():
+    # deep in matter domination D ∝ a, so D(99)/D(49) ≈ (1+49)/(1+99) = 0.5
+    om, ol = 0.3, 0.7
+    ratio = units.growth_factor(99.0, om, ol) / units.growth_factor(49.0, om, ol)
+    assert ratio == pytest.approx(50.0 / 100.0, rel=0.02)
+
+
+def test_growth_factor_ratio_zflux_to_zinit():
+    # the b_F amplitude factor D(z_flux)/D(z_init): ~26x at z=2.8 vs z=99 (LCDM)
+    om, ol = 0.3, 0.7
+    ratio = units.growth_factor(2.8, om, ol) / units.growth_factor(99.0, om, ol)
+    assert ratio == pytest.approx(26.0, rel=0.1)
+
+
+def test_growth_rate_approx():
+    om, ol = 0.3, 0.7
+    assert units.growth_rate(0.0, om, ol) == pytest.approx(0.3 ** 0.55, rel=1e-6)
+    assert units.growth_rate(5.0, om, ol) > 0.95            # -> 1 in matter domination

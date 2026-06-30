@@ -38,7 +38,8 @@ folder that fails parameter validation is skipped with a warning.
 
 📓 **Tutorial:** [`notebooks/quickstart.ipynb`](notebooks/quickstart.ipynb) walks
 through params → τ → IC (all three paths) → `PriyaDataset` → `.npz` export, end to
-end. It runs anywhere (tiny synthetic fixtures, no multi-GB data needed).
+end. It runs anywhere (tiny synthetic fixtures, no multi-GB data needed); to run it
+install `pip install -e ".[ic,plots]"` (bigfile + matplotlib).
 
 > **Status.** This version ships the full stack: the building blocks (`units`,
 > `params`, `runconfig`, `paths`), the Lyman-α `tau` loader (`load_tau_grid`), the
@@ -121,8 +122,8 @@ from priya_loader import load_ic_density
 
 # Eulerian CIC density of the displaced particles (default):
 f = load_ic_density(ic_dir, ptype="dm", nmesh=256)              # -> rho/<rho>-1
-# OR the exact linear delta_1 for the bias cross-spectrum (Roger's estimator):
-f = load_ic_density(ic_dir, ptype="dm", nmesh=512, field="icdensity")
+# OR the exact linear delta_1 for the bias cross-spectrum (de Belsunce et al.):
+f = load_ic_density(ic_dir, ptype="dm", nmesh=512, field="icdensity")  # nmesh must divide ngrid
 f.delta        # (nmesh, nmesh, nmesh) float32, axes (x,y,z)
 f.redshift     # IC redshift (~99); f.meta has Omega0/OmegaLambda/Time for D(z)
 ```
@@ -130,15 +131,42 @@ f.redshift     # IC redshift (~99); f.meta has Omega0/OmegaLambda/Time for D(z)
 **Choosing the field.** `field="icdensity"` returns the native **linear `δ₁`**
 (the `ICDensity` block on the Lagrangian grid) — the exact field a field-level
 bias estimator wants; `field="cic"` (default) returns the **Eulerian** density of
-the displaced particles. For `icdensity`, use `nmesh` dividing `ngrid`
-(512/1536 → 128/256/384/512) and `nmesh ≤ ngrid`; it is window-free at
-`nmesh=ngrid`, a sinc top-hat below. Both are **real-space**, at `z_init≈99`.
+the displaced particles.
 
-To cross-correlate with `tau` for the flux bias, you (the consumer) handle: the
-growth rescale `D(z_flux)/D(z_init)`, deconvolving the IC window (CIC `sinc²` or
-icdensity sinc), co-registering to the τ cube's `cube_axes` (the τ LOS is a
-redshift-space velocity axis — resample it separately), and the mean-flux
-normalization. `bigfile` is required (`pip install -e ".[ic]"`).
+> ⚠️ **`icdensity` `nmesh` must divide `ngrid`** (1536 → 256/384/512; 3072 →
+> 256/384/512/768). The block-average is exact only at `nmesh=ngrid` (modulo
+> GenIC's ~1-cell Gaussian smoothing, sub-percent at `k≲1`) and a clean `sinc`
+> top-hat at divisors. **Do NOT use `nmesh=480` with `icdensity`** — 480 divides
+> neither 1536 nor 3072, so the bins are uneven and the window biases `β_F` at
+> finite `k`. `field="cic"` takes **any** `nmesh` (use 480 to match τ). Both
+> fields are **real-space**, at `z_init≈99`.
+
+To cross-correlate with `tau` for the flux bias, you (the consumer) handle:
+- the **growth rescale** `D(z_flux)/D(z_init)` (use `units.growth_factor`);
+- **co-registration with the 480 τ transverse grid**: with `cic`, paint at
+  `nmesh=480` and transpose to `tau.cube_axes`; with `icdensity`, load at a
+  *divisor* `nmesh` (e.g. 512) and **cross in Fourier space over the common low-`k`
+  modes** (or Fourier-resample) — never block-average to 480;
+- the τ **LOS is a redshift-space velocity axis** — resample it separately;
+- **deconvolving the IC window** (CIC `sinc²`, or the `icdensity` block-average `sinc`);
+- the **mean-flux** normalization, and whether to **mask/fill DLAs** in raw τ
+  (saturated `τ>1e6` troughs are density-correlated and bias large-scale `b_F`).
+
+`bigfile` is required (`pip install -e ".[ic]"`).
+
+**Third path — raw particles (mesh it yourself).** If you'd rather control the
+mass assignment (e.g. paint with your own nbodykit/Pylians), get the raw columns —
+no meshing:
+
+```python
+from priya_loader import load_ic_particles
+data, header = load_ic_particles(ic_dir, ptype="dm", columns=("Position",), subsample=1)
+data["Position"]        # (N, 3) comoving kpc/h ; also "Velocity"/"ICDensity"/"ID"
+# header: box_mpc_h, hubble, redshift
+```
+
+(Our built-in CIC is verified bit-for-bit vs an explicit reference and vs Pylians;
+nbodykit's compensation/interlacing are opt-in "tricks" we don't apply.)
 
 **IC memory vs `nmesh`** (one τ axis ≈ 1.46 GB; reading `Position` is I/O-bound:
 81 GB/type at 1536³, 648 GB/type at 3072³):
@@ -146,13 +174,14 @@ normalization. `bigfile` is required (`pip install -e ".[ic]"`).
 | `nmesh` | IC paint peak | IC δ (f4) | per-sample (δ+τ) | login node? |
 |--------:|--------------:|----------:|-----------------:|:-----------:|
 | 256 | 1.3 GB | 0.06 GB | 1.5 GB | ✅ |
-| 480 | 2.7 GB | 0.41 GB | 1.9 GB | ✅ (matches τ transverse) |
+| 480 | 2.7 GB | 0.41 GB | 1.9 GB | ✅ (matches τ transverse — **`cic` only**) |
 | 512 | 3.0 GB | 0.50 GB | 2.0 GB | ✅ |
 | 1024 | 17 GB | 4.0 GB | 5.5 GB | ⚠️ tight |
 | 1536 | 55 GB | 13.5 GB | 15.0 GB | ❌ batch node |
 
 Peak ≈ `2·nmesh³` float64 (mesh + one transient bincount) + ~1 GB chunk; **use
-`nmesh ≤ 512` on a login node** (or `480` to match the τ transverse grid).
+`nmesh ≤ 512` on a login node** (for `cic`, `480` matches the τ transverse grid;
+for `icdensity` use a divisor of `ngrid` — see the warning above).
 
 ### Why a `runconfig` module?
 

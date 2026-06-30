@@ -114,7 +114,7 @@ class PriyaDataset:
         for sim in paths.discover_simulations(self.root):
             try:
                 params = SimParams.from_dir(sim.directory, validate=self.validate)
-            except ValueError as e:
+            except (ValueError, OSError) as e:   # OSError: run config not yet staged
                 warnings.warn(f"skipping {sim.name}: {e}")
                 continue
             if self.fidelity is not None and params.fidelity != self.fidelity:
@@ -140,7 +140,7 @@ class PriyaDataset:
             for snap, tau_path in tau_files:
                 try:
                     g = load_tau_grid(tau_path, axis=self.flux_axis)
-                except (ValueError, OSError) as e:
+                except (ValueError, OSError, RuntimeError) as e:   # RuntimeError: axis-guard mislabel
                     warnings.warn(f"{sim.name} SPECTRA_{snap:03d}: tau load failed ({e}); skipped")
                     continue
                 yield Sample(

@@ -11,8 +11,18 @@ against the real data. Pinned commits below:
 | [lya_emulator](https://github.com/sbird/lya_emulator) | `27dac4f6c89b9126e141ed58316aff613d311c4f` (master) | 2025-10-24 |
 | [SimulationRunner](https://github.com/sbird/SimulationRunner) | `5adf4fe25ea7c376394327b47da481f663466788` (master) | 2025-09-22 |
 
-Detailed per-claim notes (with quoted code) are in `dev_private/references/04-06`
-(not committed). Line numbers are from the pinned commits.
+Line numbers are from the pinned commits.
+
+**Trace any citation yourself.** Every citation below was verified to resolve to
+the claimed code at its pinned commit. Open the raw file or the line-anchored
+view (line numbers may have drifted ±1 between commits; search the token if so):
+
+```
+raw:  https://raw.githubusercontent.com/<owner>/<repo>/<commit>/<path>
+view: https://github.com/<owner>/<repo>/blob/<commit>/<path>#L<line>
+# e.g. https://github.com/MP-Gadget/MP-Gadget/blob/471711f8.../genic/params.c#L65
+#      https://github.com/sbird/fake_spectra/blob/93d0e509.../fake_spectra/griddedspectra.py#L42
+```
 
 ## `units.py` — MP-Gadget internal units (@ 471711f8)
 
@@ -22,7 +32,7 @@ Detailed per-claim notes (with quoted code) are in `dev_private/references/04-06
 | `UNIT_MASS_IN_G = 1.989e43` (1e10 Msun/h) | `genic/params.c:66`; `libgadget/petaio.c:502` |
 | `UNIT_VELOCITY_IN_CM_S = 1e5` (1 km/s) | `genic/params.c:64`; `libgadget/petaio.c:500` |
 | `v_pec = u_stored * sqrt(a)` | `libgenic/zeldovich.c:201` `vel_prefac /= sqrt(GenicConfig.TimeIC)`. **Caveat:** skipped when header `UsePeculiarVelocity == 1` (then Velocity is already peculiar km/s). |
-| `RHO_CRIT_1E10_MSUN_H = 27.7537` | Derived: `3 H0^2/(8 pi G)`. MP-Gadget computes it at `libgadget/cosmology.c:21` (with `G=6.672e-8`, `H=3.2407789e-18`, `physconst.h`) → `27.755`; agrees with the textbook `27.7537` to ~5 sig figs. |
+| `RHO_CRIT_1E10_MSUN_H = 27.7537` | Derived: `3 H0^2/(8 pi G)`. MP-Gadget computes it at `libgadget/cosmology.c:21` (with `G=6.672e-8`, `H=3.2407789e-18`, `physconst.h`) → `27.755`; agrees with the textbook `27.7537` to ~4 sig figs (rel. diff ~5e-5). |
 | particle mass `Omega * RHO_CRIT * box^3 / Ngrid^3` | `libgenic/save.c:106` (CDM), `:96` (gas) |
 
 ## `params.py` / `paths.py` / `runconfig.py` — naming & parameters
@@ -33,7 +43,7 @@ Detailed per-claim notes (with quoted code) are in `dev_private/references/04-06
 | Parameter order `ns, Ap, herei, heref, alphaq, hub, omegamh2, hireionz, bhfeedback` | `lyaemu/coarse_grid.py:41` `param_names` @ 27dac4f |
 | `Ap = scalar_amp * ((2π/8)/0.05)^(ns−1)` (Ap = A at 8 Mpc/h ≈ k 0.785; scalar_amp = A_s at k=0.05) | `lyaemu/coarse_grid.py:154-157, 259-265` @ 27dac4f (the literal "0.78" in the name is the code's rounding of `2π/8`) |
 | `SimulationICs.json` `box`/`npart` unreliable | `SimulationRunner simulationics.py:267-285` @ 5adf4fe — `txt_description()` snapshots `__dict__` once at IC-build and is not rewritten when GenIC is regenerated. (`box`/`npart` are required args, *not* defaults; the `15`/`192` values came from the generating script.) Empirically: 30/60 emu_full JSONs read `box=15, npart=192` while the run is 120/1536. |
-| IC dir name `<box>_<Ngrid>_<z_init>` (e.g. `120_1536_99`) | GenIC `FileBase`, SimulationRunner `mpgenic.ini` @ 5adf4fe |
+| IC dir name `<box>_<Ngrid>_<z_init>` (e.g. `120_1536_99`) | GenIC `FileBase`/`OutputDir`, built at `SimulationRunner/simulationics.py:210-211` @ 5adf4fe (the template `mpgenic.ini` only holds the default `FileBase = IC`) |
 | Production box/Ngrid from `mpgadget.param`/`_genic_params.ini` | MP-Gadget / MP-GenIC parameter files |
 
 ## `ic.py` / `mesh.py` — IC particle reading (@ MP-Gadget 471711f8)
@@ -41,9 +51,11 @@ Detailed per-claim notes (with quoted code) are in `dev_private/references/04-06
 | claim | source |
 |---|---|
 | particle type `0 = gas`, `1 = DM` (bigfile block prefix) | MP-Gadget / MP-GenIC particle-type convention (`libgenic/save.c`) |
-| `Position` is comoving kpc/h in `[0, BoxSize)` | `genic/params.c:65` (UnitLength = kpc/h); positions written by `libgenic/save.c` |
-| IC `Position` are LPT/Zel'dovich-displaced particles (not the native linear `ICDensity` block) | `libgenic/zeldovich.c` (displacement); `ICDensity` is a separate per-particle block |
+| `Position` is comoving kpc/h in `[0, BoxSize)` | `genic/params.c:65` (UnitLength = kpc/h); positions written `libgenic/save.c:73` |
+| `Position` = Lagrangian grid `q` + **1LPT Zel'dovich** displacement `Ψ` (no 2LPT) | `libgenic/zeldovich.c:243-244` (`Pos += Disp`); `q` from `idgen_create_pos_from_index` `zeldovich.c:85,98`; `Ψ(k)=ik/k²·δ(k)` `zeldovich.c:293,308` @ 471711f8 |
+| native `ICDensity` block = **linear density contrast `δ₁`** on the Lagrangian grid (= −∇·Ψ, 1st order), ~1-cell smoothed | `libgenic/save.c:72`; filled by the "Density" transfer `zeldovich.c:182,284` = white noise × `DeltaSpec(k)` (normalized linear δ, `power.c:52-65`) @ 471711f8. *(Read by `load_ic_density(..., field="icdensity")`.)* |
 | CIC overdensity `δ=ρ/⟨ρ⟩−1`; raw (uncompensated) window `sinc²` | standard cloud-in-cell (ref `03_bigfile_ic_units.md` §5.2) |
+| IC linear P(k)/transfer generated by **CLASS** (the `classy` Python binding), not CAMB | `SimulationRunner/simulationics.py::cambfile()` (`from classy import Class`, `.compute()`, lines 12-13,169-187; `camb_git = classy.__version__` line 444) @ 5adf4fe. The staged sims have `camb_git: 0.2.9` (the older `classylss` binding — also CLASS). `camb_linear/`/`camb_git` are legacy CAMB labels. |
 
 ## `tau.py` — fake_spectra gridded product (@ v2.2.3, 93d0e509)
 
@@ -53,14 +65,15 @@ Detailed per-claim notes (with quoted code) are in `dev_private/references/04-06
 | 3-axis grid: `Nlos = 3·ngrid²`, axis 1/2/3 blocks contiguous | `griddedspectra.py:34-60` (3-axis mode) |
 | **`CUBE_AXES` mapping** axis1→(y,z,x), axis2→(x,z,y), axis3→(x,y,z), lower-numbered transverse coord = slow/outer index | `griddedspectra.py:42-60`: `grid_id = [0,nn,mm]/[nn,0,mm]/[nn,mm,0]`, `for nn ... for mm` (C-order). **Also verified empirically** against `spectra/cofm` for all 3 axes (held LOS coord = 0; `box/ngrid` = 250 ckpc/h spacing). |
 | tau is **redshift-space** (LOS = velocity axis) | `absorption.cpp:234` `vel = velfac*pos1 + pvel` (Hubble + peculiar), binned in velocity |
-| transverse spacing `dx = box/ngrid` | `griddedspectra.py:58` `dx = self.box/nspec` (250 ckpc/h is the PRIYA value, not a constant) |
+| transverse spacing `dx = box/ngrid` | `griddedspectra.py:57` `dx = self.box/(1.*nspec)` (250 ckpc/h is the PRIYA value, not a constant) |
 | pixel `dv ≈ res` (~10 km/s) | `spectra.py` `dvbin = vmax/int(vmax/res)` (≈ `res` up to `int()`; library asserts to `rtol=1e-2`) |
 | `F = exp(-tau)` | `fluxstatistics.py` (mean-flux / `_rescale_mean_flux`) |
 | Header attrs (box ckpc/h, hubble, omegam/b/l, Hz, nbins, redshift) written by fake_spectra | `spectra.py` `save_file` Header writes |
 
 ## Notes / discrepancies recorded
-- **ID block ordering** (relevant only to the *native-ICDensity* route, which we do
-  not use): in current MP-Gadget master, DM (type 1) gets the low ID block and gas
-  (type 0) the high block (`genic/main.c:192,198`), the *opposite* of an older
-  GenIC. Mitigation for any future native loader: scatter by ID within each type's
-  own block (subtract that block's `ID.min()`).
+- **ID block ordering** (relevant to the `field="icdensity"` route): in current
+  MP-Gadget master, DM (type 1) gets the low ID block and gas (type 0) the high
+  block (`genic/main.c:192,198`), the *opposite* of an older GenIC. The loader is
+  invariant to this: within a type the row-major index is `(ID-1) mod ngrid³`
+  (per-type `FirstID` is a multiple of `ngrid³`), and a completeness check
+  (`ID.max()-ID.min()+1 == npart`) rejects partial blocks.

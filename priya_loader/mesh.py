@@ -1,5 +1,14 @@
 """Streaming cloud-in-cell (CIC) mesh painter — pure numpy, memory-safe.
 
+**Not nbodykit / pmesh.** This is a self-contained implementation of the
+standard cloud-in-cell mass-assignment scheme (Hockney & Eastwood 1981, "Computer
+Simulation Using Particles", §5-3): a `np.bincount` scatter of the 8 tri-linear
+corner weights with periodic wrap. It has **no third-party meshing dependency**
+(no nbodykit, pmesh, or MPI) — only numpy — so there is no external commit to
+pin. It matches nbodykit's ``resampler="cic"`` *uncompensated* result up to the
+CIC window (we ship raw; see below). ``backend="nbodykit"`` in the IC loader is
+not implemented.
+
 Deposits particle positions onto a periodic ``nmesh^3`` grid. Designed to be fed
 in **chunks** (accumulate into a preallocated ``out`` array) so a huge particle
 load never has to be resident at once. Peak memory is ``~2 * nmesh^3`` float64
@@ -14,9 +23,19 @@ flux for the bias), deconvolve ``sinc^2`` before use; at ``k -> 0`` the window
 -> 1. (Shipping raw is the deliberate design; an optional ``nbodykit`` /
 compensated backend can be added later.)
 
-CIC weighting: each particle contributes to the 8 nearest cells with weights
-``(1-d)`` / ``d`` per axis (``d`` = fractional offset from the lower cell),
-wrapped periodically. Total deposited mass equals the particle count.
+Algorithm (per particle at mesh-unit position ``p = position/boxsize * nmesh``):
+  1. lower cell ``i = floor(p)``; fractional offset ``d = p - i`` in ``[0,1)``;
+  2. for each of the 8 corners ``o in {0,1}^3``, weight ``w = prod_axis (1-d if
+     o=0 else d)`` is added to cell ``(i + o) mod nmesh`` (periodic wrap).
+The 8 weights sum to 1, so total deposited mass = particle count (mass-conserving).
+The grid node sits at integer cell coordinate, i.e. position ``j*box/nmesh`` —
+matching fake_spectra's ``cofm`` grid so the IC mesh co-registers with tau.
+
+Implementation: the only loop is over the 8 fixed corners; for each, all
+particles are scattered in one ``np.bincount`` (O(N), vectorized). This is the
+same kernel as nbodykit/pmesh ``resampler="cic"`` (uncompensated, non-interlaced)
+— verified bit-for-bit against an explicit reference CIC in the tests, and
+against nbodykit itself where it is installed.
 """
 from __future__ import annotations
 

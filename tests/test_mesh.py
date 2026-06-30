@@ -100,3 +100,68 @@ def test_out_must_be_float64_and_right_shape():
         mesh.cic_paint(pos, nmesh=4, out=np.zeros((4, 4, 4), dtype=np.float32))
     with pytest.raises((ValueError, TypeError)):
         mesh.cic_paint(pos, nmesh=4, out=np.zeros((3, 3, 3), dtype=np.float64))
+
+
+def _explicit_cic(pos, nmesh, boxsize=None):
+    """Transparent, obviously-correct CIC (explicit per-particle 8-corner loop) —
+    the independent reference our vectorized bincount painter must match exactly."""
+    rho = np.zeros((nmesh, nmesh, nmesh))
+    p = np.asarray(pos, float)
+    if boxsize is not None:
+        p = p * (nmesh / boxsize)
+    for x in p:
+        i = np.floor(x).astype(int)
+        d = x - i
+        for ox in (0, 1):
+            wx = (1 - d[0]) if ox == 0 else d[0]
+            for oy in (0, 1):
+                wy = (1 - d[1]) if oy == 0 else d[1]
+                for oz in (0, 1):
+                    wz = (1 - d[2]) if oz == 0 else d[2]
+                    rho[(i[0] + ox) % nmesh, (i[1] + oy) % nmesh, (i[2] + oz) % nmesh] += wx * wy * wz
+    return rho
+
+
+def test_cic_matches_explicit_reference():
+    # Proves the bincount vectorization == textbook CIC, bit-for-bit (no nbodykit needed).
+    rng = np.random.RandomState(3)
+    pos = rng.uniform(0, 16, size=(3000, 3))
+    np.testing.assert_allclose(mesh.cic_paint(pos, 16), _explicit_cic(pos, 16), atol=1e-10)
+    # with a physical boxsize too
+    posb = rng.uniform(0, 120.0, size=(1500, 3))
+    np.testing.assert_allclose(
+        mesh.cic_paint(posb, 12, boxsize=120.0), _explicit_cic(posb, 12, boxsize=120.0), atol=1e-10
+    )
+
+
+def test_cic_identical_to_nbodykit():
+    """Our raw CIC == nbodykit's UNcompensated, NON-interlaced CIC (the 'tricks'
+    we deliberately omit). Auto-skips where nbodykit isn't installed."""
+    nbk = pytest.importorskip("nbodykit")              # skip if absent
+    from nbodykit.source.catalog import ArrayCatalog
+    rng = np.random.RandomState(5)
+    box, nmesh = 120.0, 16
+    pos = rng.uniform(0, box, size=(5000, 3))
+    ours = mesh.to_overdensity(mesh.cic_paint(pos, nmesh, boxsize=box))
+    cat = ArrayCatalog({"Position": pos.astype("f8")})
+    m = cat.to_mesh(Nmesh=nmesh, BoxSize=box, resampler="cic",
+                    compensated=False, interlaced=False)
+    theirs = np.asarray(m.compute(mode="real")) - 1.0   # nbodykit paints 1+delta
+    np.testing.assert_allclose(ours, theirs, atol=1e-6)
+
+
+def test_cic_identical_to_pylians():
+    """Our CIC == Pylians (MAS_library) CIC, an independent third-party reference.
+    Agreement is to Pylians' float32 accumulation roundoff (a convention/origin
+    mismatch would be O(1)). Auto-skips where Pylians isn't installed."""
+    MASL = pytest.importorskip("MAS_library")
+    rng = np.random.RandomState(11)
+    box, grid = 120.0, 32
+    pos = rng.uniform(0, box, size=(20000, 3)).astype(np.float32)
+    ours_rho = mesh.cic_paint(pos.astype(np.float64), grid, boxsize=box)
+    ours = ours_rho / ours_rho.mean() - 1.0
+    pyl = np.zeros((grid, grid, grid), dtype=np.float32)
+    MASL.MA(pos, pyl, box, "CIC")
+    theirs = pyl / pyl.mean() - 1.0
+    assert abs(ours_rho.sum() - len(pos)) < 1e-3            # mass conserved
+    np.testing.assert_allclose(ours, theirs, atol=5e-5)     # == to float32 roundoff

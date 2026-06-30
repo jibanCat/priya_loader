@@ -61,14 +61,14 @@ _NAME_RE = re.compile("".join(f"{k}{_FLOAT}" for k in _NAME_KEYS) + r"$")
 
 # Pivot wavenumbers (Mpc^-1) for the amplitude cross-check.
 # Origin: lya_emulator lyaemu/coarse_grid.py:154-157 @ 27dac4f --
-#   conv = (0.05 / (2*pi/8))**(ns-1) ; scalar_amp(=A_s @0.05) = Ap / conv
+#   conv = (0.05 / (2*pi/8))**(ns-1) ; Ap = scalar_amp(=A_s @0.05) / conv
 # i.e. Ap = scalar_amp * ((2*pi/8) / 0.05)**(ns-1). The exact pivot is 2*pi/8
 # (= 0.7854 Mpc^-1); the folder name's "Ap" comment rounds it to 0.78.
 PIVOT_K_SCALAR_AMP = 0.05               # A_s pivot (CAMB/CLASS default)
 PIVOT_K_AP = 2.0 * np.pi / 8.0          # PRIYA "Ap" pivot, 8 Mpc/h scale (~0.7854)
 
-# Allowed (npart per side, box Mpc/h) combinations for the released suite.
-_ALLOWED_RESOLUTIONS = {(1536, 120.0): "lowres", (3072, 120.0): "hires"}
+# Released-suite resolutions: npart per side (box is always 120 Mpc/h).
+_ALLOWED_NPART = {1536, 3072}   # 1536 lowres, 3072 hires
 
 # Required cosmology/astro keys in SimulationICs.json (box/npart intentionally
 # excluded — those come from the run config).
@@ -206,10 +206,10 @@ class SimParams:
            JSON ``scalar_amp`` within ``amp_rtol`` (catches a JSON/folder
            amplitude mispairing — the only otherwise-unvalidated cosmo param).
         """
-        if (self.npart, self.box) not in _ALLOWED_RESOLUTIONS:
+        if self.npart not in _ALLOWED_NPART or not np.isclose(self.box, 120.0, atol=1e-3):
             raise ValueError(
                 f"{self.name}: resolution (npart={self.npart}, box={self.box}) is "
-                f"not a released PRIYA combination {sorted(_ALLOWED_RESOLUTIONS)}"
+                f"not a released PRIYA combination (npart in {sorted(_ALLOWED_NPART)}, box=120)"
             )
         token_checks = {
             "ns": self.ns, "hub": self.hubble, "herei": self.here_i,
@@ -240,6 +240,20 @@ class SimParams:
     def as_vector(self, keys: Sequence[str]) -> np.ndarray:
         """Return the named parameters as a float array, in the given order."""
         return np.array([getattr(self, k) for k in keys], dtype=float)
+
+    def to_dict(self) -> dict:
+        """Resolved parameters as a JSON-serialisable dict (authoritative box/npart
+        from the run config, not the possibly-stale JSON)."""
+        return {
+            "name": self.name, "fidelity": self.fidelity,
+            "box": self.box, "npart": self.npart,
+            "omega0": self.omega0, "omegab": self.omegab, "hubble": self.hubble,
+            "omega_lambda": self.omega_lambda, "omega_m_h2": self.omega_m_h2,
+            "scalar_amp": self.scalar_amp, "ns": self.ns,
+            "here_i": self.here_i, "here_f": self.here_f, "alpha_q": self.alpha_q,
+            "hireionz": self.hireionz, "bhfeedback": self.bhfeedback,
+            "heatamp": self.heatamp, "z_init": self.z_init, "z_end": self.z_end,
+        }
 
 
 def _fidelity_from_ngrid(ngrid: int) -> str:

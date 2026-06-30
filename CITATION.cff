@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use priya_loader in your research, please cite it."
+title: "priya_loader: ML-friendly access to the PRIYA Lyman-alpha simulation suite"
+abstract: >-
+  A clean loader that turns the PRIYA MP-Gadget Lyman-alpha hydrodynamic
+  simulation suite into ML-ready 3D numpy arrays: the initial-condition density
+  field and the Lyman-alpha optical-depth (tau) field per simulation and redshift,
+  with the simulation parameters.
+authors:
+  - family-names: Ho
+    given-names: Ming-Feng
+    email: mfho@umich.edu
+version: 0.1.0.dev0
+license: MIT
+repository-code: "https://github.com/jibanCat/priya_loader"
+keywords:
+  - lyman-alpha
+  - cosmology
+  - simulations
+  - MP-Gadget
+  - machine-learning

@@ -26,8 +26,13 @@ Two things a downstream (bias) analysis must know, exposed on :class:`TauGrid`:
   axis 3 -> ``(x, y, z_los)``, with the LOS coordinate last. Co-registering with
   an IC density mesh requires this mapping (a wrong transpose biases b_F).
 
+* **Raw tau includes DLAs.** Saturated damped-absorber troughs (``tau > 1e6``)
+  are returned as-is; they are density-correlated and bias the large-scale flux
+  bias, so masking/filling them is a consumer decision that affects ``b_F``
+  (PRIYA's own P1D pipeline fills them). We ship raw so you can choose.
+
 Flux ``F = exp(-tau)`` and ``delta_flux = F/<F> - 1`` are optional derived
-helpers (Roger's pipeline consumes ``tau`` directly).
+helpers (the downstream pipeline consumes ``tau`` directly).
 """
 from __future__ import annotations
 
@@ -69,6 +74,7 @@ class TauGrid:
     nbins: int                   # LOS velocity pixels (redshift-dependent)
     box: float                   # Mpc/h
     cube_axes: Tuple[str, str, str]   # physical coord of each cube index; LOS last
+    space: str = "redshift"      # redshift space (LOS = velocity axis); cf. ICField.space
     meta: Dict[str, Any] = field(default_factory=dict, repr=False)
 
 
@@ -110,6 +116,15 @@ def load_tau_grid(path: StrPath, axis: int = 1) -> TauGrid:
     except OSError as e:
         # A mid-transfer / truncated file is not openable by h5py.
         raise ValueError(f"{path}: cannot open (truncated or corrupt HDF5?): {e}") from e
+    try:
+        return _read_tau(h5, path, axis)
+    except OSError as e:
+        # Truncated tail (valid superblock, missing rows): wrap the payload-read error.
+        # (_read_tau's `with h5` has already closed the handle.)
+        raise ValueError(f"{path}: read failed (truncated or corrupt HDF5?): {e}") from e
+
+
+def _read_tau(h5, path, axis):
     with h5:
         f = h5
         if "Header" not in f:

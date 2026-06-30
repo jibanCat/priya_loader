@@ -37,7 +37,7 @@ MPC_IN_CM = UNIT_LENGTH_IN_CM * KPC_PER_MPC   # 3.085678e24 cm = 1 Mpc/h
 #: (1e10 Msun/h) / (Mpc/h)^3. Used for particle masses. This is the textbook
 #: value; MP-Gadget computes it at runtime (libgadget/cosmology.c:21, with
 #: G=6.672e-8, H=3.2407789e-18 @ 471711f8) and gets 27.755 -- they agree to
-#: ~5 sig figs (the difference is MP-Gadget's older value of G).
+#: ~4 sig figs (rel. diff ~5e-5; the difference is MP-Gadget's older value of G).
 RHO_CRIT_1E10_MSUN_H = 27.7537
 
 
@@ -73,13 +73,44 @@ def scale_factor_to_redshift(a):
 
 # --- Hubble rate / line-of-sight velocity scaling -----------------------------
 def hubble_z(z, omega_m, omega_lambda, hubble):
-    """Hubble rate H(z) in km/s/(Mpc/h) for flat LCDM (radiation neglected).
+    """Hubble rate H(z) in km/s/Mpc for flat LCDM (radiation neglected).
 
     ``H(z) = 100 h * sqrt(omega_m (1+z)^3 + omega_lambda)``. The tau loader uses
     the authoritative ``Hz`` stored in each file header when present, and this as
     a fallback to recompute it from cosmology.
     """
     return 100.0 * hubble * np.sqrt(omega_m * (1.0 + z) ** 3 + omega_lambda)
+
+
+def growth_factor(z, omega_m, omega_lambda):
+    """Linear growth factor ``D(z)``, normalized to ``D(z=0) = 1`` (flat LCDM).
+
+    Convenience for rescaling the IC linear ``delta_1`` (at ``z_init~99``) to the
+    flux redshift: the bias amplitude needs ``D(z_flux) / D(z_init)``. Uses the
+    standard integral ``D(a) ∝ H(a) ∫_0^a da' / (a' H(a'))^3`` (pure numpy).
+    """
+    def _D(a):
+        aa = np.linspace(1e-7, a, 4000)
+        E = np.sqrt(omega_m * aa ** -3 + omega_lambda)        # H(a)/H0
+        integ = np.sum(0.5 * (1.0 / (aa * E) ** 3)[1:] * np.diff(aa)
+                       + 0.5 * (1.0 / (aa * E) ** 3)[:-1] * np.diff(aa))
+        return np.sqrt(omega_m * a ** -3 + omega_lambda) * integ
+    a = 1.0 / (1.0 + np.asarray(z, dtype=float))
+    if a.ndim == 0:
+        return _D(float(a)) / _D(1.0)
+    d0 = _D(1.0)
+    return np.array([_D(float(ai)) for ai in a]) / d0
+
+
+def growth_rate(z, omega_m, omega_lambda):
+    """Linear growth rate ``f(z) = dlnD/dlna ~= Omega_m(z)^0.55`` (flat LCDM).
+
+    The standard gamma=0.55 approximation. (Note: ``f`` is not needed to measure
+    ``beta_F`` from the cross-spectrum mu^2 term — only to decompose ``b_eta``.)
+    """
+    a = 1.0 / (1.0 + z)
+    omega_m_z = omega_m * a ** -3 / (omega_m * a ** -3 + omega_lambda)
+    return omega_m_z ** 0.55
 
 
 def velfac(z, omega_m, omega_lambda, hubble):
@@ -101,7 +132,7 @@ def gadget_velocity_to_peculiar_kms(velocity_stored, scale_factor):
     **Caveat:** GenIC applies this ``1/sqrt(a)`` ONLY when writing Zel'dovich
     velocities; if the IC header attr ``UsePeculiarVelocity == 1`` the stored
     ``Velocity`` is already peculiar km/s and must NOT be multiplied by sqrt(a).
-    Check that attr (the IC loader, PR3) before calling this.
+    Check that attr in the IC loader before calling this.
     """
     return velocity_stored * np.sqrt(scale_factor)
 

@@ -31,7 +31,7 @@ GRID_SPECTRA_FILENAME = "lya_forest_spectra_grid_480.hdf5"
 
 _SIM_MARKER = "SimulationICs.json"
 # IC bigfile dir naming "<box_Mpc>_<Ngrid>_<z_init>" (e.g. 120_1536_99): the
-# GenIC FileBase set by SimulationRunner (mpgenic.ini, @ 5adf4fe).
+# GenIC FileBase set by SimulationRunner simulationics.py:210-211 @ 5adf4fe.
 _IC_GRID_RE = re.compile(r"^(?P<box>\d+)_(?P<ngrid>\d+)_(?P<zinit>\d+)$")
 _SPECTRA_RE = re.compile(r"^SPECTRA_(\d+)$")
 

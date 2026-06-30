@@ -11,25 +11,49 @@ simulation into clean 3-D numpy arrays so you can treat the suite as a dataset:
   *unmodified*). Flux `F = exp(−τ)` and `δ_F = F/⟨F⟩ − 1` are provided as
   optional derived helpers.
 
-The headline object (coming in a later release) loops over every
-simulation/redshift and yields, per snapshot:
+The headline object `PriyaDataset` loops over every simulation/redshift and
+yields, per snapshot:
 
 ```python
 [ SimParams, redshift, ic_density_3d, tau_3d ]
 ```
 
-so a downstream pipeline (e.g. a JAX bias-estimation code) can `np.load` and go.
+so a downstream pipeline (e.g. a JAX bias-estimation code) can `np.load` and go:
 
-> **Status.** This version ships the building blocks (`units`, `params`,
-> `runconfig`, `paths`), the Lyman-α `tau` loader (`load_tau_grid`), **and the IC
-> density loader** (`load_ic_density`). The `PriyaDataset` orchestrator that ties
-> them into the `[params, z, ic, tau]` tuple lands in a subsequent release.
+```python
+from priya_loader import PriyaDataset
+
+ds = PriyaDataset("/path/to/priya/emu_full", fidelity="lowres",
+                  ic_nmesh=256, ic_field="cic", flux_axis=1)   # ic_field="icdensity" for linear δ₁
+for s in ds:                       # lazy: one (sim, redshift) in memory at a time
+    s.params, s.redshift, s.ic, s.tau     # SimParams, float, (nmesh³) δ, (480,480,nbins) τ
+    # ... or s.as_tuple() -> (params, redshift, ic, tau)
+
+ds.export("out/")                  # one .npz per (sim, z) for the JAX pipeline
+```
+
+It degrades gracefully on partial/mid-transfer data: sims with no staged `tau`
+are skipped, a missing production IC yields `ic=None` (τ-only samples), and a
+folder that fails parameter validation is skipped with a warning.
+
+📓 **Tutorial:** [`notebooks/quickstart.ipynb`](notebooks/quickstart.ipynb) walks
+through params → τ → IC (all three paths) → `PriyaDataset` → `.npz` export, end to
+end. It runs anywhere (tiny synthetic fixtures, no multi-GB data needed); to run it
+install `pip install -e ".[ic,plots]"` (bigfile + matplotlib).
+
+> **Status.** This version ships the full stack: the building blocks (`units`,
+> `params`, `runconfig`, `paths`), the Lyman-α `tau` loader (`load_tau_grid`), the
+> IC density loader (`load_ic_density`), **and the `PriyaDataset` orchestrator**
+> that ties them into the `[params, z, ic, tau]` tuple.
 
 ## Install
 
-Lightweight (flux fields + exported `.npz`; runs on a NERSC login node, no MPI):
+Not on PyPI yet — clone and install editable. Lightweight core (flux fields +
+exported `.npz`; runs on a NERSC login node, no MPI):
 
 ```bash
+git clone https://github.com/jibanCat/priya_loader.git
+cd priya_loader
 pip install -e .            # core = numpy + h5py only
 ```
 
@@ -96,19 +120,68 @@ it fits a NERSC login node — all three axes would be ~4.6 GB.
 ```python
 from priya_loader import load_ic_density
 
-f = load_ic_density(ic_dir, ptype="dm", nmesh=256)   # bigfile particles -> CIC mesh
-f.delta        # (nmesh, nmesh, nmesh) float32 overdensity rho/<rho>-1, axes (x,y,z)
+# Eulerian CIC density of the displaced particles (default):
+f = load_ic_density(ic_dir, ptype="dm", nmesh=256)              # -> rho/<rho>-1
+# OR the exact linear delta_1 for the bias cross-spectrum (de Belsunce et al.):
+f = load_ic_density(ic_dir, ptype="dm", nmesh=512, field="icdensity")  # nmesh must divide ngrid
+f.delta        # (nmesh, nmesh, nmesh) float32, axes (x,y,z)
 f.redshift     # IC redshift (~99); f.meta has Omega0/OmegaLambda/Time for D(z)
 ```
 
-The IC density is the **Eulerian CIC field of the displaced particles** at
-`z_init≈99` (not the native linear `ICDensity` block), in **real space**, and is
-**raw/uncompensated** CIC. To cross-correlate with `tau` for the flux bias, you
-(the consumer) handle: the growth rescale `D(z_flux)/D(z_init)`, the `sinc²` CIC
-deconvolution, co-registering to the τ cube's `cube_axes` at `nmesh=480`
-transverse (the τ LOS is a redshift-space velocity axis — resample it separately),
-and the mean-flux normalization. Peak memory ≈ `2·nmesh³` float64 + one chunk
-(use `nmesh ≤ 512` on a login node). `bigfile` is required (`pip install -e ".[ic]"`).
+**Choosing the field.** `field="icdensity"` returns the native **linear `δ₁`**
+(the `ICDensity` block on the Lagrangian grid) — the exact field a field-level
+bias estimator wants; `field="cic"` (default) returns the **Eulerian** density of
+the displaced particles.
+
+> ⚠️ **`icdensity` `nmesh` must divide `ngrid`** (1536 → 256/384/512; 3072 →
+> 256/384/512/768). The block-average is exact only at `nmesh=ngrid` (modulo
+> GenIC's ~1-cell Gaussian smoothing, sub-percent at `k≲1`) and a clean `sinc`
+> top-hat at divisors. **Do NOT use `nmesh=480` with `icdensity`** — 480 divides
+> neither 1536 nor 3072, so the bins are uneven and the window biases `β_F` at
+> finite `k`. `field="cic"` takes **any** `nmesh` (use 480 to match τ). Both
+> fields are **real-space**, at `z_init≈99`.
+
+To cross-correlate with `tau` for the flux bias, you (the consumer) handle:
+- the **growth rescale** `D(z_flux)/D(z_init)` (use `units.growth_factor`);
+- **co-registration with the 480 τ transverse grid**: with `cic`, paint at
+  `nmesh=480` and transpose to `tau.cube_axes`; with `icdensity`, load at a
+  *divisor* `nmesh` (e.g. 512) and **cross in Fourier space over the common low-`k`
+  modes** (or Fourier-resample) — never block-average to 480;
+- the τ **LOS is a redshift-space velocity axis** — resample it separately;
+- **deconvolving the IC window** (CIC `sinc²`, or the `icdensity` block-average `sinc`);
+- the **mean-flux** normalization, and whether to **mask/fill DLAs** in raw τ
+  (saturated `τ>1e6` troughs are density-correlated and bias large-scale `b_F`).
+
+`bigfile` is required (`pip install -e ".[ic]"`).
+
+**Third path — raw particles (mesh it yourself).** If you'd rather control the
+mass assignment (e.g. paint with your own nbodykit/Pylians), get the raw columns —
+no meshing:
+
+```python
+from priya_loader import load_ic_particles
+data, header = load_ic_particles(ic_dir, ptype="dm", columns=("Position",), subsample=1)
+data["Position"]        # (N, 3) comoving kpc/h ; also "Velocity"/"ICDensity"/"ID"
+# header: box_mpc_h, hubble, redshift
+```
+
+(Our built-in CIC is verified bit-for-bit vs an explicit reference and vs Pylians;
+nbodykit's compensation/interlacing are opt-in "tricks" we don't apply.)
+
+**IC memory vs `nmesh`** (one τ axis ≈ 1.46 GB; reading `Position` is I/O-bound:
+81 GB/type at 1536³, 648 GB/type at 3072³):
+
+| `nmesh` | IC paint peak | IC δ (f4) | per-sample (δ+τ) | login node? |
+|--------:|--------------:|----------:|-----------------:|:-----------:|
+| 256 | 1.3 GB | 0.06 GB | 1.5 GB | ✅ |
+| 480 | 2.7 GB | 0.41 GB | 1.9 GB | ✅ (matches τ transverse — **`cic` only**) |
+| 512 | 3.0 GB | 0.50 GB | 2.0 GB | ✅ |
+| 1024 | 17 GB | 4.0 GB | 5.5 GB | ⚠️ tight |
+| 1536 | 55 GB | 13.5 GB | 15.0 GB | ❌ batch node |
+
+Peak ≈ `2·nmesh³` float64 (mesh + one transient bincount) + ~1 GB chunk; **use
+`nmesh ≤ 512` on a login node** (for `cic`, `480` matches the τ transverse grid;
+for `icdensity` use a divisor of `ngrid` — see the warning above).
 
 ### Why a `runconfig` module?
 
@@ -123,7 +196,9 @@ handled for you in `SimParams.from_dir`.
 
 **Simulations.** `emu_full` is the low-res suite (**1536³ particles, 120 Mpc/h**,
 ~60 simulations); `emu_full_hires` is the high-res suite (**3072³, 120 Mpc/h**).
-Each simulation is one point in a 9-dimensional Latin hypercube:
+Each simulation is one point in a 9-dimensional Latin hypercube. The ranges below
+are **measured from the 60 staged `emu_full` folders** (via `SimParams`), not
+quoted from a paper:
 
 | group | parameter | symbol | range (emu_full) |
 |-------|-----------|--------|------------------|
@@ -135,7 +210,7 @@ Each simulation is one point in a 9-dimensional Latin hypercube:
 | HI reion. | `hireionz` | z_HI | 6.5 – 8.0 |
 | feedback | `bhfeedback` | ε_BH | 0.031 – 0.069 |
 
-**Redshifts.** The forest snapshots span **z ≈ 5.4 → 2.0 in Δz = 0.2 steps**
+**Redshifts.** The forest snapshots span **z ≈ 5.4 → 2.2 in Δz = 0.2 steps**
 (the science range used by the PRIYA flux-power emulator). Snapshot→redshift is
 read from each file's own header (indices are *not* a fixed z map and have gaps),
 so the loader never assumes a redshift from a directory index.

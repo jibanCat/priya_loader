@@ -21,8 +21,9 @@ simulation/redshift and yields, per snapshot:
 so a downstream pipeline (e.g. a JAX bias-estimation code) can `np.load` and go.
 
 > **Status.** This version ships the building blocks (`units`, `params`,
-> `runconfig`, `paths`) **plus the Lyman-α `tau` loader** (`load_tau_grid`). The
-> IC density loader and the `PriyaDataset` orchestrator land in subsequent releases.
+> `runconfig`, `paths`), the Lyman-α `tau` loader (`load_tau_grid`), **and the IC
+> density loader** (`load_ic_density`). The `PriyaDataset` orchestrator that ties
+> them into the `[params, z, ic, tau]` tuple lands in a subsequent release.
 
 ## Install
 
@@ -45,8 +46,8 @@ Or create the full contributor environment:
 conda env create -f environment.yml && conda activate priya_loader && pip install -e .
 ```
 
-`nbodykit` (an optional alternative meshing backend) is **not** a pip extra —
-install it manually from conda-forge if you want it.
+An `nbodykit`-based meshing backend is **not yet implemented** (only the
+pure-numpy CIC ships today); `load_ic_density(..., backend="nbodykit")` raises.
 
 ## Quick start
 
@@ -90,6 +91,25 @@ flux = to_flux(g.tau)            # exp(-tau); allocates another ~1.5 GB
 is ~1.5 GB (`230 400 × nbins` float32); the loader reads **one axis at a time** so
 it fits a NERSC login node — all three axes would be ~4.6 GB.
 
+### Loading the initial-condition density
+
+```python
+from priya_loader import load_ic_density
+
+f = load_ic_density(ic_dir, ptype="dm", nmesh=256)   # bigfile particles -> CIC mesh
+f.delta        # (nmesh, nmesh, nmesh) float32 overdensity rho/<rho>-1, axes (x,y,z)
+f.redshift     # IC redshift (~99); f.meta has Omega0/OmegaLambda/Time for D(z)
+```
+
+The IC density is the **Eulerian CIC field of the displaced particles** at
+`z_init≈99` (not the native linear `ICDensity` block), in **real space**, and is
+**raw/uncompensated** CIC. To cross-correlate with `tau` for the flux bias, you
+(the consumer) handle: the growth rescale `D(z_flux)/D(z_init)`, the `sinc²` CIC
+deconvolution, co-registering to the τ cube's `cube_axes` at `nmesh=480`
+transverse (the τ LOS is a redshift-space velocity axis — resample it separately),
+and the mean-flux normalization. Peak memory ≈ `2·nmesh³` float64 + one chunk
+(use `nmesh ≤ 512` on a login node). `bigfile` is required (`pip install -e ".[ic]"`).
+
 ### Why a `runconfig` module?
 
 The per-simulation `SimulationICs.json` carries **stale template `box`/`npart`**
@@ -126,6 +146,11 @@ output `output/SPECTRA_<NNN>/lya_forest_spectra_grid_480.hdf5` holds HI Lyα
 axes (x, y, z) = 691,200 skewers**. Transverse spacing = box/480 = 250 ckpc/h; the
 LOS has `nbins` velocity pixels (z-dependent, ≈1570–1750) at ≈10 km/s. `priya_loader`
 returns one axis as a `(480, 480, nbins)` cube, unmodified.
+
+**Initial-condition density.** Each simulation's `ICS/<box>_<Ngrid>_99/` is an
+MP-GenIC `bigfile` of gas (type 0) and DM (type 1) particles (comoving kpc/h
+positions). `load_ic_density` streams one type and CIC-paints it to an `nmesh³`
+real-space overdensity `δ = ρ/⟨ρ⟩−1` (float32) at `z_init≈99`.
 
 > **Partial staging.** A given machine often holds only part of the suite
 > mid-transfer (e.g. only the high-z snapshots, or some simulations with no `tau`

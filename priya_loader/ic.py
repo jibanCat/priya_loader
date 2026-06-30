@@ -1,0 +1,181 @@
+"""Initial-conditions density loader: MP-GenIC ``bigfile`` particles -> mesh.
+
+Streams particle ``Position`` from the IC bigfile in chunks and paints them onto
+a periodic ``nmesh^3`` mesh (cloud-in-cell, :mod:`priya_loader.mesh`), returning
+the overdensity ``delta = rho/<rho> - 1``. The full particle load is never
+resident: peak memory is ``~2 * nmesh^3`` float64 plus one chunk (see
+:mod:`priya_loader.mesh`), so coarse meshes run on a NERSC login node
+(recommended ``nmesh <= 512``). ``bigfile`` is an optional dependency
+(``pip install priya_loader[ic]``).
+
+What this field IS
+------------------
+* **Eulerian density of the displaced particles** — the IC ``Position`` block
+  holds the LPT/Zel'dovich-displaced particles, and we CIC-paint *those*. This is
+  NOT the native per-particle linear ``ICDensity`` block (which we do not read).
+* **At the IC redshift** ``z_init ~ 99`` — the returned amplitude is the z=99
+  one. For a bias cross-spectrum at the flux redshift, the consumer must rescale
+  by the linear growth factor ``D(z_flux) / D(z_init)`` (a scale-independent
+  scalar; e.g. ~26x at z=2.8). We expose ``Omega0/OmegaLambda/Time`` in ``meta``
+  so ``D(z)`` is computable; the rescale itself is left to the consumer.
+  (At z=99 the displacements are tiny, so this field ~ the linear field.)
+* **Real space** (``space="real"``; cf. ``TauGrid.space == "redshift"``).
+  Crossing this real-space delta with the redshift-space flux is the *intended*
+  Kaiser estimator (gives the full mu-shape for b_F and beta_F) — do not add RSD.
+* **Raw, uncompensated CIC** — carries the CIC window; deconvolve ``sinc^2`` for
+  an unbiased finite-k cross-spectrum (see :mod:`priya_loader.mesh`).
+* **``ptype="dm"`` is a total-matter proxy** — exact at ``k -> 0``; baryons
+  differ at the percent level on quasilinear scales at z=99.
+
+Co-registration with a tau cube (read this before cross-correlating)
+--------------------------------------------------------------------
+``ICField.delta`` is indexed ``[x, y, z]`` (``axes = ("x", "y", "z")``), origin 0,
+cell ``box/nmesh`` — the same grid origin as the fake_spectra ``cofm``. The tau
+cube from :func:`priya_loader.load_tau_grid` is **anisotropic**:
+``(ngrid, ngrid, nbins)`` with ``nbins != ngrid``, its first two axes transverse
+(``box/ngrid``) and its **last axis a redshift-space velocity axis**
+(``dv_kms ~ 10`` km/s), ordered per ``TauGrid.cube_axes`` (e.g. axis=1 -> y,z,x).
+So:
+  * match the **transverse** plane by painting at ``nmesh = tau.ngrid`` (=480)
+    and transposing the IC mesh to ``cube_axes``;
+  * the **LOS** axis is NOT a common ``nmesh`` — resample tau's velocity LOS onto
+    a common comoving grid (using ``tau.meta["dv_kms"]`` / ``units.velfac``), or
+    use a transverse/projected cross-statistic.
+The loader only meshes the IC; it never transforms tau.
+
+Units: ``Position`` is comoving kpc/h; ``box`` is reported in Mpc/h.
+"""
+from __future__ import annotations
+
+import os
+import warnings
+from dataclasses import dataclass, field
+from typing import Any, Dict, Union
+
+import numpy as np
+
+from . import mesh, units
+
+StrPath = Union[str, os.PathLike]
+
+#: particle-type name -> bigfile block prefix (MP-Gadget convention: 0 gas, 1 DM)
+PTYPE = {"gas": 0, "dm": 1}
+
+
+@dataclass
+class ICField:
+    """Initial-condition overdensity on a mesh."""
+
+    delta: np.ndarray            # (nmesh, nmesh, nmesh) float32 overdensity
+    nmesh: int
+    box: float                   # Mpc/h
+    ptype: str                   # "gas" | "dm"
+    redshift: float              # IC redshift (z_init, ~99); see growth note below
+    npart: int                   # particles painted
+    axes: tuple = ("x", "y", "z")
+    space: str = "real"          # real space (cf. TauGrid.space == "redshift")
+    meta: Dict[str, Any] = field(default_factory=dict, repr=False)
+
+
+def _attr(attrs, key):
+    """Read a scalar bigfile Header attr as a python float.
+
+    bigfile stores attrs as arrays, so scalars come back as 1-element arrays.
+    Only call this on scalar attrs — ``ravel()[0]`` would silently take the first
+    element of a vector attr (e.g. ``MassTable``).
+    """
+    return float(np.asarray(attrs[key]).ravel()[0])
+
+
+def load_ic_density(
+    ic_dir: StrPath,
+    ptype: str = "dm",
+    nmesh: int = 256,
+    chunk_size: int = 8_000_000,
+    backend: str = "numpy",
+) -> ICField:
+    """Load the IC density field for one particle type as an ``nmesh^3`` overdensity.
+
+    Parameters
+    ----------
+    ic_dir : str or os.PathLike
+        An MP-GenIC IC bigfile directory (contains ``Header`` and ``<t>/Position``).
+    ptype : {"dm", "gas"}
+        Particle type (1=DM, 0=gas).
+    nmesh : int
+        Mesh cells per side (coarse default; raise for finer fields).
+    chunk_size : int
+        Particles read per streaming chunk (memory vs. overhead tradeoff).
+    backend : {"numpy"}
+        Painter backend. Only the lightweight numpy CIC is implemented; an
+        ``nbodykit`` backend may be added later.
+
+    Returns
+    -------
+    ICField
+    """
+    if ptype not in PTYPE:
+        raise ValueError(f"ptype must be one of {sorted(PTYPE)}; got {ptype!r}")
+    if backend != "numpy":
+        raise ValueError(f"unknown backend {backend!r} (only 'numpy' is implemented)")
+    if nmesh < 1 or chunk_size < 1:
+        raise ValueError(f"nmesh and chunk_size must be >= 1 (got {nmesh}, {chunk_size})")
+    try:
+        import bigfile
+    except ImportError as e:  # pragma: no cover
+        raise ImportError("reading ICs needs bigfile: pip install priya_loader[ic]") from e
+
+    with bigfile.File(str(ic_dir)) as bf:        # close the handle (looping is the use case)
+        attrs = bf["Header"].attrs
+        keys = set(attrs.keys())
+        if "BoxSize" not in keys:
+            raise ValueError(f"{ic_dir}: Header has no BoxSize")
+        box_kpc_h = _attr(attrs, "BoxSize")
+        hubble = _attr(attrs, "HubbleParam") if "HubbleParam" in keys else None
+        omega0 = _attr(attrs, "Omega0") if "Omega0" in keys else None
+        omega_lambda = _attr(attrs, "OmegaLambda") if "OmegaLambda" in keys else None
+        time = _attr(attrs, "Time") if "Time" in keys else None
+        if "Redshift" in keys:
+            redshift = _attr(attrs, "Redshift")
+        elif time is not None:
+            redshift = units.scale_factor_to_redshift(time)
+        else:
+            redshift = float("nan")
+            warnings.warn(f"{ic_dir}: Header has no Redshift/Time; redshift set to NaN")
+
+        block_name = f"{PTYPE[ptype]}/Position"
+        if block_name not in bf.blocks:
+            raise ValueError(
+                f"{ic_dir}: no '{block_name}' block (ptype={ptype!r} absent in this IC)"
+            )
+        block = bf[block_name]
+        npart = int(block.size)
+
+        rho = np.zeros((nmesh, nmesh, nmesh), dtype=np.float64)
+        for start in range(0, npart, chunk_size):
+            stop = min(start + chunk_size, npart)
+            pos = block[start:stop]                  # (chunk, 3) comoving kpc/h
+            mesh.cic_paint(pos, nmesh, boxsize=box_kpc_h, out=rho)
+
+    delta = mesh.to_overdensity(rho).astype(np.float32)
+    return ICField(
+        delta=delta,
+        nmesh=nmesh,
+        box=units.kpc_h_to_mpc_h(box_kpc_h),
+        ptype=ptype,
+        redshift=redshift,
+        npart=npart,
+        space="real",
+        meta={
+            "ic_dir": str(ic_dir),
+            "backend": backend,
+            "cell_kpc_h": box_kpc_h / nmesh,
+            "hubble": hubble,
+            # cosmology so the consumer can compute the growth factor D(z) needed
+            # to rescale this z_init field to the flux redshift (see docstring):
+            "Omega0": omega0,
+            "OmegaLambda": omega_lambda,
+            "Time": time,
+            "los_is_velocity_axis": False,           # real space (cf. tau)
+        },
+    )

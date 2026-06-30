@@ -35,9 +35,8 @@ dependencies = [
 ic = ["bigfile"]               # initial-conditions reading (particle bigfiles)
 plots = ["matplotlib"]
 dev = ["pytest>=7", "matplotlib", "bigfile"]
-# NOTE: nbodykit is an *optional* alternative meshing backend but is intentionally
-# NOT listed as a pip extra — it is unmaintained and usually fails to `pip install`
-# on modern Python. Install it manually (conda-forge) if you want backend="nbodykit".
+# NOTE: an nbodykit-based meshing backend is NOT yet implemented (only the
+# pure-numpy CIC ships); nbodykit is therefore intentionally not a pip extra.
 
 [project.urls]
 Repository = "https://github.com/jibanCat/priya_loader"
@@ -54,5 +53,4 @@ testpaths = ["tests"]
 addopts = "-ra"
 markers = [
     "realdata: requires the real PRIYA data tree on disk (auto-skipped if absent)",
-    "needs_bigfile: requires the optional bigfile dependency (auto-skipped if absent)",
 ]

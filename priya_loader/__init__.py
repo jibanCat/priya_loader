@@ -33,7 +33,7 @@ Design notes for users familiar with the simulations:
     sqrt(a) velocity convention) are documented in :mod:`priya_loader.units`.
 """
 
-__version__ = "0.1.0.dev0"
+__version__ = "0.2.0.dev0"
 
 from . import mesh, units  # noqa: E402
 from .dataset import PriyaDataset, Sample  # noqa: E402

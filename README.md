@@ -36,10 +36,15 @@ It degrades gracefully on partial/mid-transfer data: sims with no staged `tau`
 are skipped, a missing production IC yields `ic=None` (τ-only samples), and a
 folder that fails parameter validation is skipped with a warning.
 
-📓 **Tutorial:** [`notebooks/quickstart.ipynb`](notebooks/quickstart.ipynb) walks
-through params → τ → IC (all three paths) → `PriyaDataset` → `.npz` export, end to
-end. It runs anywhere (tiny synthetic fixtures, no multi-GB data needed); to run it
-install `pip install -e ".[ic,plots]"` (bigfile + matplotlib).
+📓 **Tutorial:** [`notebooks/quickstart.ipynb`](notebooks/quickstart.ipynb) is a
+step-by-step, beginner-friendly walk (no MP-Gadget experience assumed) through
+params → τ/flux → IC density → `PriyaDataset` → `.npz` export, with simple
+matplotlib visualizations. It is written against the **real** staged PRIYA tree and
+defaults to the NERSC path — the low-res ICs are **512³** (`ICS/120_512_99`); edit
+the `ROOT` cell to point at your own copy. To run it, `pip install -e ".[ic,notebook]"`
+(adds bigfile + matplotlib + Jupyter). Note: `PriyaDataset`'s IC discovery targets
+the **production** grid (1536³/3072³); where only the 512³ companion is staged, use
+the explicit `load_ic_density(.../ICS/120_512_99, …)` shown in the notebook.
 
 > **Status.** This version ships the full stack: the building blocks (`units`,
 > `params`, `runconfig`, `paths`), the Lyman-α `tau` loader (`load_tau_grid`), the
@@ -110,8 +115,8 @@ flux = to_flux(g.tau)            # exp(-tau); allocates another ~1.5 GB
 ```
 
 `tau` is returned **exactly as stored** (no mean-flux/τ₀ rescaling). The cube is
-**anisotropic**: 250 ckpc/h transverse (`box/480`) vs ~70 ckpc/h along the LOS
-(`box/nbins`), and the LOS pixel is ≈10 km/s (`g.meta["dv_kms"]`). Each axis cube
+**anisotropic**: 250 ckpc/h transverse (`box/480`) vs ≈70–110 ckpc/h along the LOS
+(`box/nbins`, z/cosmology-dependent), and the LOS pixel is ≈10 km/s (`g.meta["dv_kms"]`). Each axis cube
 is ~1.5 GB (`230 400 × nbins` float32); the loader reads **one axis at a time** so
 it fits a NERSC login node — all three axes would be ~4.6 GB.
 
@@ -165,7 +170,7 @@ data["Position"]        # (N, 3) comoving kpc/h ; also "Velocity"/"ICDensity"/"I
 # header: box_mpc_h, hubble, redshift
 ```
 
-(Our built-in CIC is verified bit-for-bit vs an explicit reference and vs Pylians;
+(Our built-in CIC is verified bit-for-bit vs an explicit reference, and to float32 roundoff vs Pylians;
 nbodykit's compensation/interlacing are opt-in "tricks" we don't apply.)
 
 **IC memory vs `nmesh`** (one τ axis ≈ 1.46 GB; reading `Position` is I/O-bound:
@@ -219,7 +224,7 @@ so the loader never assumes a redshift from a directory index.
 output `output/SPECTRA_<NNN>/lya_forest_spectra_grid_480.hdf5` holds HI Lyα
 (`tau/H/1/1215`, float32) on a **regular 480×480 transverse grid × 3 line-of-sight
 axes (x, y, z) = 691,200 skewers**. Transverse spacing = box/480 = 250 ckpc/h; the
-LOS has `nbins` velocity pixels (z-dependent, ≈1570–1750) at ≈10 km/s. `priya_loader`
+LOS has `nbins` velocity pixels (z-dependent, ≈1100–1750 — more pixels at higher z) at ≈10 km/s. `priya_loader`
 returns one axis as a `(480, 480, nbins)` cube, unmodified.
 
 **Initial-condition density.** Each simulation's `ICS/<box>_<Ngrid>_99/` is an
@@ -247,13 +252,21 @@ pip install -e ".[dev]"
 pytest                      # hermetic: no real data or network required
 ```
 
-Tests use synthetic fixtures only, so they run anywhere. Tests marked `realdata`
-(which load genuine multi-GB `grid_480` files) are **auto-skipped** unless you
-point at a staged tree:
+The default `pytest` run uses synthetic fixtures only, so it runs anywhere. Two
+opt-in gates exercise genuine data and **auto-skip** otherwise:
 
 ```bash
+# τ / flux on the real grid_480 files (tests marked `realdata`):
 PRIYA_DATA_ROOT=/path/to/priya/emu_full pytest -m realdata
+
+# real MP-GenIC IC sign-off, pointed at ONE staged IC bigfile directory
+# (low-res = 512³ `120_512_99`; hi-res = `120_3072_99`, resolution test only):
+PRIYA_REAL_IC=/path/to/priya/emu_full/<sim>/ICS/120_512_99 pytest tests/test_real_ic.py
 ```
+
+The built-in dependency-free CIC reference always runs; the Pylians/nbodykit
+CIC cross-checks additionally need those libraries (Pylians builds only in a
+`numpy<2` env). See `tests/test_real_ic.py` for the full gate documentation.
 
 ## Provenance
 

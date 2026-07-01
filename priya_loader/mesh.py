@@ -18,10 +18,11 @@ chunk_size``). Recommended ``nmesh <= 512`` on a NERSC login node
 (512^3 ~ 2 GiB, 1024^3 ~ 16 GiB). It needs no MPI.
 
 The result is a **raw, uncompensated** CIC field: it carries the CIC window
-``W(k) = prod sinc^2(pi k_i / k_Ny)``. For a finite-k cross-spectrum (e.g. IC x
-flux for the bias), deconvolve ``sinc^2`` before use; at ``k -> 0`` the window
--> 1. (Shipping raw is the deliberate design; an optional ``nbodykit`` /
-compensated backend can be added later.)
+``W(k) = prod_i sinc^2(k_i * dx / 2)`` with ``dx = box/nmesh`` (Jing 2005,
+arXiv:astro-ph/0409240, eqs 3,7; Hockney & Eastwood 1981 §5-3). For a finite-k
+cross-spectrum (e.g. IC x flux for the bias), deconvolve this ``sinc^2`` before
+use; at ``k -> 0`` the window -> 1. (Shipping raw is the deliberate design; an
+optional ``nbodykit`` / compensated backend can be added later.)
 
 Algorithm (per particle at mesh-unit position ``p = position/boxsize * nmesh``):
   1. lower cell ``i = floor(p)``; fractional offset ``d = p - i`` in ``[0,1)``;
@@ -34,8 +35,8 @@ matching fake_spectra's ``cofm`` grid so the IC mesh co-registers with tau.
 Implementation: the only loop is over the 8 fixed corners; for each, all
 particles are scattered in one ``np.bincount`` (O(N), vectorized). This is the
 same kernel as nbodykit/pmesh ``resampler="cic"`` (uncompensated, non-interlaced)
-— verified bit-for-bit against an explicit reference CIC in the tests, and
-against nbodykit itself where it is installed.
+— verified bit-for-bit against an explicit reference CIC in the tests, and to
+float32 roundoff against nbodykit/Pylians where installed.
 """
 from __future__ import annotations
 

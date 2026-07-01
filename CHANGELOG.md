@@ -3,6 +3,31 @@
 All notable changes to `priya_loader`. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver.
 
+## [Unreleased]
+
+### Added
+- `tests/test_real_ic.py` — real-IC verification, gated behind `PRIYA_REAL_IC`
+  (skips by default). Codifies the NERSC sign-off the synthetic fixtures can't
+  reach: resolution/box invariants, the linear `δ₁` (`icdensity`) and Eulerian
+  `cic` sanity, **CIC equivalence on real particle positions** — against a built-in
+  dependency-free reference (runs unconditionally) plus optional Pylians (in a
+  `numpy<2` env) and nbodykit cross-checks — and `icdensity`↔`cic` consistency at
+  z≈99. Verified on NERSC against the staged **512³** low-res companion
+  (`120_512_99`) and the **3072³** hi-res IC (resolution/box invariants only — a
+  full 3072³ particle CIC would read ~700 GB); the 1536³ low-res grid referenced in
+  older notes is not staged there.
+- `[notebook]` install extra (`jupyterlab` + `ipykernel` + `matplotlib` + `bigfile`)
+  so `notebooks/quickstart.ipynb` runs from a clean install.
+- Provenance: expanded git-stamped citations in `PROVENANCE.md` / `HANDOFF.md` and inline
+  in the notebook (units, cosmology helpers, the `ID`-decode formula, Pylians/nbodykit/
+  bigfile pins); corrected the `A_p` pivot label (8 Mpc scale, `k≈0.785 Mpc⁻¹`).
+
+### Changed
+- `notebooks/quickstart.ipynb` rewritten as a step-by-step **pedagogical** tutorial
+  for users new to MP-Gadget: it defaults to the staged NERSC PRIYA path, makes
+  explicit that the low-res ICs are **512³**, and walks through loader usage plus
+  simple matplotlib visualizations of the parameters, τ/flux fields, and IC density.
+
 ## [0.1.0] — 2026-06-29
 
 First tagged release. ML-friendly access to the PRIYA MP-Gadget Lyman-α suite.
@@ -18,7 +43,7 @@ First tagged release. ML-friendly access to the PRIYA MP-Gadget Lyman-α suite.
   `dv_kms` metadata; `to_flux`/`mean_flux`/`to_delta_flux` helpers.
 - **`load_ic_density`** — IC density mesh from the MP-GenIC bigfile, two fields:
   `field="cic"` (Eulerian CIC of displaced particles; built-in numpy CIC verified
-  bit-for-bit vs an explicit reference and vs Pylians) and `field="icdensity"`
+  bit-for-bit vs an explicit reference, and to float32 roundoff vs Pylians) and `field="icdensity"`
   (the native linear `δ₁` on the Lagrangian grid — the bias-cross-spectrum
   reference; `nmesh` must divide `ngrid`).
 - **`load_ic_particles`** — raw particle columns (Position/Velocity/ICDensity/ID),

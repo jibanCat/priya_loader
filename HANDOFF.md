@@ -18,7 +18,7 @@ for s in ds:                      # lazy: one (sim, z) in memory at a time
 ds.export("out/")                 # one .npz per (sim, z) for the JAX pipeline
 ```
 
-## Recommended path for the bias cross-spectrum `b_F = P_{F,δ₁}/P_{δ₁δ₁}`
+## Recommended path for the bias cross-spectrum `b_F = P_{δ_F,δ₁}/P_{δ₁δ₁}` (flux contrast `δ_F = F/⟨F⟩−1`)
 
 1. **Use the linear `δ₁`**: `ic_field="icdensity"` (the native `ICDensity` block,
    reshaped to the Lagrangian grid) — not the CIC field. `nmesh` **must divide**
@@ -32,15 +32,19 @@ ds.export("out/")                 # one .npz per (sim, z) for the JAX pipeline
    480, so **Fourier-match the common low-`k` modes** (or Fourier-resample your
    512 `δ₁` to 480) — both fields share the box origin (CIC node and `cofm` both at
    `j·box/N`). Real-space `δ₁` × redshift-space τ is the intended Kaiser estimator
-   (gives `b_δ(1+β_F μ²)`); do **not** add RSD to `δ₁`.
-4. **Window**: deconvolve the IC window for finite-`k` work (CIC `sinc²`, or the
-   `icdensity` block-average `sinc`); it → 1 at the low-`k` modes that set `b_F`.
+   (gives `b_δ(1+β_F μ²)`; Kaiser 1987, MNRAS 227, 1; for the Lyα flux form see
+   McDonald 2003, arXiv:astro-ph/0108064 and Slosar et al. 2011, arXiv:1104.5244);
+   do **not** add RSD to `δ₁`.
+4. **Window**: deconvolve the IC window for finite-`k` work (CIC `sinc²(k_iΔ/2)`,
+   Jing 2005 arXiv:astro-ph/0409240; or the `icdensity` block-average `sinc`); it
+   → 1 at the low-`k` modes that set `b_F`. (Pylians/nbodykit CIC conventions are
+   pinned in `PROVENANCE.md`.)
 5. **Flux**: `F = exp(−τ)`, `δ_F = F/F̄ − 1`. Choose `F̄` (raw box mean vs an
    observational/τ₀ target — sets the `b_F` amplitude) and decide on **DLA masking**
    (raw τ keeps saturated `τ>1e6` troughs, which bias large-scale `b_F`).
 
 If you'd rather mesh yourself, `load_ic_particles(...)` returns the raw particle
-columns. Our CIC is verified bit-for-bit vs an explicit reference and vs Pylians;
+columns. Our CIC is verified bit-for-bit vs an explicit reference, and to float32 roundoff vs Pylians;
 we ship raw (no nbodykit compensation/interlacing).
 
 ## Data staging — check before you run

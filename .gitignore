@@ -225,14 +225,19 @@ CLAUDE.md
 AGENTS.md
 GEMINI.md
 .claude/
-dev_private/          # internal plans, research briefs, review notes
+# internal plans, research briefs, review notes
+# (git does NOT strip trailing inline comments, so each comment is on its own line)
+dev_private/
 **/dev_private/
 *.internal.md
-scratch_*.py          # local scratch scripts
+# local scratch scripts
+scratch_*.py
 
 # Large / data artifacts (paths point to /scratch or NERSC at runtime)
 *.npy
 *.npz
 *.hdf5
 *.h5
-!tests/**/fixtures/**.hdf5   # allow tiny committed test fixtures only
+# allow tiny committed test fixtures only (un-ignore must follow the ignores above)
+!tests/**/fixtures/*.hdf5
+!tests/**/fixtures/*.h5

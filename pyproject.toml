@@ -34,6 +34,7 @@ dependencies = [
 [project.optional-dependencies]
 ic = ["bigfile"]               # initial-conditions reading (particle bigfiles)
 plots = ["matplotlib"]
+notebook = ["jupyterlab", "ipykernel", "matplotlib", "bigfile"]   # to run notebooks/quickstart.ipynb
 dev = ["pytest>=7", "matplotlib", "bigfile"]
 # NOTE: an nbodykit-based meshing backend is NOT yet implemented (only the
 # pure-numpy CIC ships); nbodykit is therefore intentionally not a pip extra.

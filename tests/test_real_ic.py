@@ -110,7 +110,7 @@ def ic_cic():
     return load_ic_density(REAL_IC, ptype="dm", nmesh=NMESH, field="cic")
 
 
-# --- resolution / unit invariants (CLAUDE.md hard constraints) ----------------
+# --- resolution / unit invariants (repo hard constraints) --------------------
 def test_real_ic_resolution_and_box_invariants():
     """npart == Ngrid^3 with Ngrid in {512,1024,1536,3072}, and box == 120 Mpc/h.
     Reads only the block size + Header (no painting) — safe at any resolution."""

@@ -18,6 +18,9 @@ All notable changes to `priya_loader`. Format loosely follows
   older notes is not staged there.
 - `[notebook]` install extra (`jupyterlab` + `ipykernel` + `matplotlib` + `bigfile`)
   so `notebooks/quickstart.ipynb` runs from a clean install.
+- Provenance: expanded git-stamped citations in `PROVENANCE.md` / `HANDOFF.md` and inline
+  in the notebook (units, cosmology helpers, the `ID`-decode formula, Pylians/nbodykit/
+  bigfile pins); corrected the `A_p` pivot label (8 Mpc scale, `k≈0.785 Mpc⁻¹`).
 
 ### Changed
 - `notebooks/quickstart.ipynb` rewritten as a step-by-step **pedagogical** tutorial

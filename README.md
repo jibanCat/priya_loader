@@ -115,8 +115,8 @@ flux = to_flux(g.tau)            # exp(-tau); allocates another ~1.5 GB
 ```
 
 `tau` is returned **exactly as stored** (no mean-flux/τ₀ rescaling). The cube is
-**anisotropic**: 250 ckpc/h transverse (`box/480`) vs ~70 ckpc/h along the LOS
-(`box/nbins`), and the LOS pixel is ≈10 km/s (`g.meta["dv_kms"]`). Each axis cube
+**anisotropic**: 250 ckpc/h transverse (`box/480`) vs ≈70–110 ckpc/h along the LOS
+(`box/nbins`, z/cosmology-dependent), and the LOS pixel is ≈10 km/s (`g.meta["dv_kms"]`). Each axis cube
 is ~1.5 GB (`230 400 × nbins` float32); the loader reads **one axis at a time** so
 it fits a NERSC login node — all three axes would be ~4.6 GB.
 
@@ -224,7 +224,7 @@ so the loader never assumes a redshift from a directory index.
 output `output/SPECTRA_<NNN>/lya_forest_spectra_grid_480.hdf5` holds HI Lyα
 (`tau/H/1/1215`, float32) on a **regular 480×480 transverse grid × 3 line-of-sight
 axes (x, y, z) = 691,200 skewers**. Transverse spacing = box/480 = 250 ckpc/h; the
-LOS has `nbins` velocity pixels (z-dependent, ≈1570–1750) at ≈10 km/s. `priya_loader`
+LOS has `nbins` velocity pixels (z-dependent, ≈1100–1750 — more pixels at higher z) at ≈10 km/s. `priya_loader`
 returns one axis as a `(480, 480, nbins)` cube, unmodified.
 
 **Initial-condition density.** Each simulation's `ICS/<box>_<Ngrid>_99/` is an

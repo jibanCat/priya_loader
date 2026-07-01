@@ -44,7 +44,7 @@ ds.export("out/")                 # one .npz per (sim, z) for the JAX pipeline
    (raw τ keeps saturated `τ>1e6` troughs, which bias large-scale `b_F`).
 
 If you'd rather mesh yourself, `load_ic_particles(...)` returns the raw particle
-columns. Our CIC is verified bit-for-bit vs an explicit reference and vs Pylians;
+columns. Our CIC is verified bit-for-bit vs an explicit reference, and to float32 roundoff vs Pylians;
 we ship raw (no nbodykit compensation/interlacing).
 
 ## Data staging — check before you run

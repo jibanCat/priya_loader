@@ -29,6 +29,10 @@ CIC painter is additive per particle, so equivalence on a strided subsample impl
 equivalence on the full set (and keeps RAM bounded).
 
 Heavy loads (one full IC stream per mesh) are shared via module-scoped fixtures.
+
+All tests here use ``ptype="dm"`` (the total-matter proxy). The gas (type-0) route
+is code-symmetric (``PTYPE["gas"]=0``) and is covered on synthetic fixtures; it is
+not separately asserted against a real IC.
 """
 import os
 
@@ -153,9 +157,12 @@ def test_real_ic_cic_overdensity_is_physical(ic_cic):
 # --- CIC bit-equivalence on REAL particles (the headline verification) --------
 def test_real_ic_cic_matches_explicit_reference_on_real_particles(real_particles):
     """Built-in CIC == the transparent per-particle reference (``test_mesh._explicit_cic``)
-    on REAL Positions. This is the headline convention/origin/transpose guarantee with
-    **no optional dependency**, so — unlike the Pylians/nbodykit cross-checks below — it
-    runs whenever real ICs are staged and is never silently skipped. A bug would be O(1)."""
+    on REAL Positions, with **no optional dependency**, so it runs on the default stack
+    (it uses the heavy fixture, so it self-skips on 3072^3 without PRIYA_REAL_IC_ALLOW_HEAVY).
+    ``_explicit_cic`` shares this painter's exact CIC convention by construction, so it
+    catches indexing/flatten/wrap/vectorization bugs but NOT a shared-convention error;
+    the Pylians/nbodykit cross-checks below are the convention-independent anchors. A
+    bug here would be O(1)."""
     pos, box = real_particles
     grid = 128
     chk = pos[:30000]                                   # bound the O(N) python reference
@@ -204,8 +211,8 @@ def test_real_ic_icdensity_and_cic_trace_same_structure(ic_icdensity, ic_cic):
     (icdensity) and Eulerian (cic) fields trace the same structure -> strongly
     correlated. Guards against a mis-mapped Lagrangian index in the icdensity
     route (which would decorrelate them). 0.5 was only a loose anti-transpose
-    guard; at z~99 the true correlation should be >~ 0.9, so we log r and require
-    a tight floor."""
+    guard; at z~99 the correlation is high (measured r≈0.87 at nmesh=256; the CIC
+    window pulls it below 1), so we log r and require a floor of 0.8."""
     a = (ic_icdensity.delta - ic_icdensity.delta.mean()).ravel()
     b = (ic_cic.delta - ic_cic.delta.mean()).ravel()
     r = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))

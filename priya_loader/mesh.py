@@ -35,8 +35,8 @@ matching fake_spectra's ``cofm`` grid so the IC mesh co-registers with tau.
 Implementation: the only loop is over the 8 fixed corners; for each, all
 particles are scattered in one ``np.bincount`` (O(N), vectorized). This is the
 same kernel as nbodykit/pmesh ``resampler="cic"`` (uncompensated, non-interlaced)
-— verified bit-for-bit against an explicit reference CIC in the tests, and
-against nbodykit itself where it is installed.
+— verified bit-for-bit against an explicit reference CIC in the tests, and to
+float32 roundoff against nbodykit/Pylians where installed.
 """
 from __future__ import annotations
 

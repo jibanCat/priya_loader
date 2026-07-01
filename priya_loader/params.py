@@ -65,7 +65,7 @@ _NAME_RE = re.compile("".join(f"{k}{_FLOAT}" for k in _NAME_KEYS) + r"$")
 # i.e. Ap = scalar_amp * ((2*pi/8) / 0.05)**(ns-1). The exact pivot is 2*pi/8
 # (= 0.7854 Mpc^-1); the folder name's "Ap" comment rounds it to 0.78.
 PIVOT_K_SCALAR_AMP = 0.05               # A_s pivot (CAMB/CLASS default)
-PIVOT_K_AP = 2.0 * np.pi / 8.0          # PRIYA "Ap" pivot, 8 Mpc/h scale (~0.7854)
+PIVOT_K_AP = 2.0 * np.pi / 8.0          # PRIYA "Ap" pivot, 8 Mpc scale (k ~ 0.7854 Mpc^-1)
 
 # Released-suite resolutions: npart per side (box is always 120 Mpc/h).
 _ALLOWED_NPART = {1536, 3072}   # 1536 lowres, 3072 hires

@@ -170,7 +170,7 @@ data["Position"]        # (N, 3) comoving kpc/h ; also "Velocity"/"ICDensity"/"I
 # header: box_mpc_h, hubble, redshift
 ```
 
-(Our built-in CIC is verified bit-for-bit vs an explicit reference and vs Pylians;
+(Our built-in CIC is verified bit-for-bit vs an explicit reference, and to float32 roundoff vs Pylians;
 nbodykit's compensation/interlacing are opt-in "tricks" we don't apply.)
 
 **IC memory vs `nmesh`** (one τ axis ≈ 1.46 GB; reading `Position` is I/O-bound:

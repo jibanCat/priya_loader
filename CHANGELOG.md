@@ -13,8 +13,11 @@ All notable changes to `priya_loader`. Format loosely follows
   dependency-free reference (runs unconditionally) plus optional Pylians (in a
   `numpy<2` env) and nbodykit cross-checks — and `icdensity`↔`cic` consistency at
   z≈99. Verified on NERSC against the staged **512³** low-res companion
-  (`120_512_99`) and the **3072³** hi-res IC; the 1536³ low-res grid referenced in
+  (`120_512_99`) and the **3072³** hi-res IC (resolution/box invariants only — a
+  full 3072³ particle CIC would read ~700 GB); the 1536³ low-res grid referenced in
   older notes is not staged there.
+- `[notebook]` install extra (`jupyterlab` + `ipykernel` + `matplotlib` + `bigfile`)
+  so `notebooks/quickstart.ipynb` runs from a clean install.
 
 ### Changed
 - `notebooks/quickstart.ipynb` rewritten as a step-by-step **pedagogical** tutorial
@@ -37,7 +40,7 @@ First tagged release. ML-friendly access to the PRIYA MP-Gadget Lyman-α suite.
   `dv_kms` metadata; `to_flux`/`mean_flux`/`to_delta_flux` helpers.
 - **`load_ic_density`** — IC density mesh from the MP-GenIC bigfile, two fields:
   `field="cic"` (Eulerian CIC of displaced particles; built-in numpy CIC verified
-  bit-for-bit vs an explicit reference and vs Pylians) and `field="icdensity"`
+  bit-for-bit vs an explicit reference, and to float32 roundoff vs Pylians) and `field="icdensity"`
   (the native linear `δ₁` on the Lagrangian grid — the bias-cross-spectrum
   reference; `nmesh` must divide `ngrid`).
 - **`load_ic_particles`** — raw particle columns (Position/Velocity/ICDensity/ID),

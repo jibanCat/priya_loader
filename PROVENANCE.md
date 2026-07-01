@@ -44,7 +44,7 @@ view: https://github.com/<owner>/<repo>/blob/<commit>/<path>#L<line>
 |---|---|
 | Folder name = `<name><value>` concatenation, `"%.3g"` | `lyaemu/coarse_grid.py:106-118` `build_dirname` @ 27dac4f |
 | Parameter order `ns, Ap, herei, heref, alphaq, hub, omegamh2, hireionz, bhfeedback` | `lyaemu/coarse_grid.py:41` `param_names` @ 27dac4f |
-| `Ap = scalar_amp * ((2π/8)/0.05)^(ns−1)` (Ap = A at 8 Mpc/h ≈ k 0.785; scalar_amp = A_s at k=0.05) | `lyaemu/coarse_grid.py:154-157, 259-265` @ 27dac4f (the literal "0.78" in the name is the code's rounding of `2π/8`) |
+| `Ap = scalar_amp * ((2π/8)/0.05)^(ns−1)` (Ap = A at the 8 Mpc scale, `k ≈ 0.785 Mpc⁻¹`; scalar_amp = A_s at `k=0.05 Mpc⁻¹`) | `lyaemu/coarse_grid.py:154-157, 259-265` @ 27dac4f (the literal "0.78" in the name is the code's rounding of `2π/8`) |
 | `SimulationICs.json` `box`/`npart` unreliable | `SimulationRunner simulationics.py:267-285` @ 5adf4fe — `txt_description()` snapshots `__dict__` once at IC-build and is not rewritten when GenIC is regenerated. (`box`/`npart` are required args, *not* defaults; the `15`/`192` values came from the generating script.) Empirically: 30/60 emu_full JSONs read `box=15, npart=192` while the run is 120/1536. |
 | IC dir name `<box>_<Ngrid>_<z_init>` (e.g. `120_1536_99`) | GenIC `FileBase`/`OutputDir`, built at `SimulationRunner/simulationics.py:210-211` @ 5adf4fe (the template `mpgenic.ini` only holds the default `FileBase = IC`) |
 | Production box/Ngrid from `mpgadget.param`/`_genic_params.ini` | MP-Gadget / MP-GenIC parameter files |

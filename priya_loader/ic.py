@@ -113,7 +113,9 @@ class ICField:
 
 @dataclass
 class ICVelocityField:
-    """IC velocity (or momentum) field on a mesh, in peculiar km/s.
+    """IC velocity (``field="velocity"``, peculiar km/s) or un-normalised CIC
+    momentum (``field="momentum"``, km/s x particles-per-cell) field on a mesh.
+    Check ``.units`` — the two branches are NOT in the same units.
 
     Note: the public attributes ``.field`` and ``.units`` intentionally shadow
     the module-level names ``dataclasses.field`` and ``priya_loader.units``
@@ -491,14 +493,19 @@ def load_ic_velocity_mesh(
     ----------
     ic_dir, ptype, nmesh, chunk_size : as :func:`load_ic_density`.
     field : {"velocity", "momentum"}
-        ``"velocity"`` (default): ``p / n`` — the mass-weighted mean velocity in
-        each cell, in peculiar km/s. Cells with no particles are set to **0** and
-        counted in ``meta["empty_cells"]`` (a warning is raised if any); at
+        ``"velocity"`` (default): ``p / n`` — the CIC-weighted mean velocity in
+        each cell, in **peculiar km/s**. Cells with no particles are set to **0**
+        and counted in ``meta["empty_cells"]`` (a warning is raised if any); at
         z ~ 99 with ``nmesh <= ngrid`` there should be none, so a nonzero count
         means your mesh is finer than the particle grid.
-        ``"momentum"``: the raw ``p`` (mass-weighted, linear in ``v``) — the field
-        to Fourier transform if you want a momentum/velocity-divergence spectrum
-        without the ``p/n`` ratio's noise in low-density cells.
+        ``"momentum"``: the raw, **un-normalised** CIC sum ``p = sum_i v_i W_i``
+        — linear in ``v``, so this is the field to Fourier transform for a
+        momentum / velocity-divergence spectrum without the ``p/n`` ratio's noise
+        in low-density cells. Its units are **km/s x particles-per-cell**, NOT
+        km/s: at ``nmesh=128`` on a 512^3 IC that is ~64x the velocity. Divide by
+        the CIC counts — ``1 + delta`` from ``load_ic_density(field="cic")`` on
+        the same ``nmesh`` is exactly the normalised count grid — to recover km/s.
+        ``ICVelocityField.units`` reports which of the two you got.
 
     Velocities are peculiar km/s: the IC Header's ``UsePeculiarVelocity`` flag is
     read and applied (see :func:`priya_loader.units.ic_velocity_to_peculiar_kms`).
@@ -605,7 +612,10 @@ def load_ic_velocity_mesh(
         redshift=redshift,
         field=field,
         npart=npart,
-        units="km/s (peculiar)",
+        # NEVER assert a unit we did not apply: the "momentum" branch is the raw
+        # CIC sum, which is km/s x particles-per-cell, not km/s.
+        units=("km/s (peculiar)" if field == "velocity"
+               else "km/s (peculiar) x particles-per-cell (un-normalised CIC sum)"),
         space="real",
         meta={
             "ic_dir": str(ic_dir),

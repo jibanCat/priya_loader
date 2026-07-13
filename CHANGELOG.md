@@ -7,8 +7,10 @@ All notable changes to `priya_loader`. Format loosely follows
 
 ### Added
 - `load_ic_velocity_mesh` — CIC velocity/momentum field from the IC particles
-  (`(3, nmesh, nmesh, nmesh)`, peculiar km/s, co-registered with `load_ic_density`);
-  `ICVelocityField`.
+  (`(3, nmesh, nmesh, nmesh)`, co-registered with `load_ic_density`);
+  `ICVelocityField`. `field="velocity"` is the mean cell velocity in peculiar
+  km/s; `field="momentum"` is the **un-normalised** CIC sum (km/s ×
+  particles-per-cell, *not* km/s — `ICVelocityField.units` says which you got).
 - `units.ic_velocity_to_peculiar_kms` — converts a stored IC `Velocity` block to
   peculiar km/s by dispatching on the IC header's `UsePeculiarVelocity` flag.
 - `notebooks/ic_particles.ipynb` — short demo of DM positions/velocities.

@@ -489,6 +489,31 @@ def test_velocity_mesh_pins_axis_order(tmp_path):
     np.testing.assert_allclose(vf.v[2], 10.0 * kk, rtol=1e-5, atol=1e-4)
 
 
+def test_velocity_mesh_units_string_matches_the_field(tmp_path):
+    """The two branches are NOT in the same units, and the object must say so.
+
+    `field="momentum"` is the raw CIC sum sum_i v_i W_i -- km/s x particles-per-cell,
+    not km/s. Asserting "km/s (peculiar)" on it would be exactly the sin this whole
+    module exists to prevent: claiming a unit we did not apply.
+    """
+    v = np.array([10.0, 0.0, 0.0], dtype="f4")
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=8, time=0.01, velocities=v,
+                         use_peculiar_velocity=1)
+    vel = ic.load_ic_velocity_mesh(p, ptype="dm", nmesh=8, field="velocity")
+    mom = ic.load_ic_velocity_mesh(p, ptype="dm", nmesh=8, field="momentum")
+
+    assert vel.units == "km/s (peculiar)"
+    assert "un-normalised" in mom.units and "particles-per-cell" in mom.units
+    assert mom.units != vel.units
+
+    # And the values really do differ by the per-cell count (1 particle/cell here,
+    # so they coincide; make it 8/cell by painting the same 8^3 particles onto 4^3).
+    vel4 = ic.load_ic_velocity_mesh(p, ptype="dm", nmesh=4, field="velocity")
+    mom4 = ic.load_ic_velocity_mesh(p, ptype="dm", nmesh=4, field="momentum")
+    np.testing.assert_allclose(vel4.v[0], 10.0, rtol=1e-4)          # mean velocity
+    np.testing.assert_allclose(mom4.v[0], 10.0 * 8, rtol=1e-4)      # x 8 particles/cell
+
+
 def test_velocity_mesh_bad_field_raises(tmp_path):
     p = _make_ic_bigfile(tmp_path / "ic", ngrid=4, velocities=np.zeros(3))
     with pytest.raises(ValueError, match="field must be"):

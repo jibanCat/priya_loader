@@ -39,7 +39,7 @@ import os
 import numpy as np
 import pytest
 
-from priya_loader import load_ic_density, load_ic_particles, mesh
+from priya_loader import load_ic_density, load_ic_particles, mesh, units
 from test_mesh import _explicit_cic   # reuse the transparent, dependency-free CIC reference
 
 REAL_IC = os.environ.get("PRIYA_REAL_IC")
@@ -108,6 +108,22 @@ def ic_cic():
     """The Eulerian CIC overdensity (``field='cic'``), loaded once."""
     _skip_if_heavy_load()
     return load_ic_density(REAL_IC, ptype="dm", nmesh=NMESH, field="cic")
+
+
+@pytest.fixture(scope="module")
+def real_ic_particles_posvel():
+    """Position + Velocity + ID from the real IC (strided subsample), plus ngrid."""
+    _skip_if_heavy_load()
+    data, header = load_ic_particles(
+        REAL_IC, ptype="dm", columns=("Position", "Velocity", "ID"),
+        subsample=SUBSAMPLE,
+    )
+    # ngrid from the FULL block size, not the subsample (subsample strides it down).
+    bigfile = pytest.importorskip("bigfile")
+    with bigfile.File(str(REAL_IC)) as bf:
+        ngrid = _cube_root(int(bf["1/Position"].size))
+    header["ids"] = data["ID"]
+    return data["Position"].astype("f8"), data["Velocity"].astype("f8"), header, ngrid
 
 
 # --- resolution / unit invariants (repo hard constraints) --------------------
@@ -218,3 +234,82 @@ def test_real_ic_icdensity_and_cic_trace_same_structure(ic_icdensity, ic_cic):
     r = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
     print(f"[icdensity<->cic] z~99 correlation r = {r:.4f}")
     assert r > 0.8, f"linear vs CIC correlation unexpectedly low: r={r:.3f}"
+
+
+# --- velocity physics (the check that catches a sqrt(a) units error) ---------
+def test_real_ic_velocity_matches_linear_theory(real_ic_particles_posvel):
+    """v_rms must equal the linear-theory prediction a*H(a)*f * sigma_disp.
+
+    Zel'dovich: v = a * H(a) * f * Psi, with Psi = x - q the displacement. So the
+    rms speed is fixed by the rms displacement measured from the SAME IC — no
+    external normalisation, no power spectrum needed.
+
+    This is the test with teeth: applying the Gadget-2 sqrt(a) factor to PRIYA's
+    (already-peculiar) velocities makes v_rms 10x too small at z=99 and fails here.
+
+    PRIYA sets ScaleDepVelocity (= DifferentTransferFunctions = 1), so v is drawn
+    from the CLASS velocity transfer function rather than being exactly f*a*H*Psi;
+    hence the generous tolerance. A units error is a factor of 10 — nowhere near it.
+
+    NOTE: load_ic_particles' header does not carry Omega0/OmegaLambda (unlike
+    load_ic_density's meta dict), so header.get("Omega0") is always None here and
+    the PRIYA-ish fallback 0.288 is what actually gets used, for every sim. That's
+    fine given the 20% tolerance (the sqrt(a) bug this test targets is a factor of
+    ~10, not ~1.2), but it means this test does NOT verify against each sim's true
+    Omega_m — only the fallback constant. See task-4-report.md for detail.
+    """
+    pos, vel, header, ngrid = real_ic_particles_posvel
+    box_kpc_h = header["box_kpc_h"]
+    a = header["scale_factor"]
+    z = header["redshift"]
+    om = header["Omega0"] if header.get("Omega0") else 0.288      # PRIYA-ish fallback
+    ol = 1.0 - om
+
+    # Displacement Psi = Position - q, with q the Lagrangian site decoded from ID
+    # (same convention as ic._load_icdensity_grid: lag = (ID-1) % npart).
+    ids = header["ids"].astype(np.int64)
+    lag = (ids - 1) % (ngrid ** 3)
+    q = np.stack([lag // (ngrid * ngrid),
+                  (lag // ngrid) % ngrid,
+                  lag % ngrid], axis=1) * (box_kpc_h / ngrid)
+    d = pos - q
+    d -= box_kpc_h * np.round(d / box_kpc_h)            # periodic minimum image
+    sigma_disp = float(np.sqrt((d ** 2).sum(axis=1).mean()))      # kpc/h, 3D rms
+
+    # a*H(a)*f * Psi, with H in km/s/(Mpc/h) and Psi in kpc/h -> km/s
+    H = units.hubble_z(z, om, ol, header["hubble"])               # km/s/(Mpc/h)
+    f = units.growth_rate(z, om, ol)
+    predicted = a * H * f * (sigma_disp / 1000.0)                 # kpc/h -> Mpc/h
+    measured = float(np.sqrt((vel ** 2).sum(axis=1).mean()))
+
+    assert measured == pytest.approx(predicted, rel=0.20), (
+        f"v_rms={measured:.3f} km/s vs linear-theory {predicted:.3f} km/s "
+        f"(ratio {measured / predicted:.3f}). A ratio near sqrt(a)={np.sqrt(a):.3f} "
+        f"or 1/sqrt(a) means the UsePeculiarVelocity dispatch is wrong."
+    )
+
+
+def test_real_ic_velocity_is_peculiar_kms(real_ic_particles_posvel):
+    """PRIYA ICs must declare UsePeculiarVelocity=1 (GenIC's default; the ini
+    doesn't override it). If this ever flips, the loader adapts — but we want to
+    KNOW, because every doc we ship states flag=1."""
+    _, _, header, _ = real_ic_particles_posvel
+    assert header["use_peculiar_velocity"] == 1
+    assert header["velocity_units"] == "km/s (peculiar)"
+
+
+def test_real_ic_gas_and_dm_velocities_differ():
+    """ScaleDepVelocity (= DifferentTransferFunctions = 1 in PRIYA) means gas and
+    DM are drawn from DIFFERENT velocity transfer functions. If these came back
+    identical, our 'ptype matters' claim in the docs would be false."""
+    _skip_if_heavy_load()
+    kw = dict(columns=("Velocity",), subsample=SUBSAMPLE)
+    try:
+        gas, _ = load_ic_particles(REAL_IC, ptype="gas", **kw)
+    except ValueError as e:
+        pytest.skip(f"no gas block in this IC: {e}")
+    dm, _ = load_ic_particles(REAL_IC, ptype="dm", **kw)
+    n = min(len(gas["Velocity"]), len(dm["Velocity"]))
+    assert not np.allclose(gas["Velocity"][:n], dm["Velocity"][:n]), (
+        "gas and DM IC velocities are identical — ScaleDepVelocity assumption is wrong"
+    )

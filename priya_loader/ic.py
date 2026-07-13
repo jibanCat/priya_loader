@@ -247,7 +247,12 @@ def load_ic_particles(
                 for s in range(0, n, chunk_size):
                     end = min(s + chunk_size, n)
                     start = (-s) % subsample            # keep global indices == 0 mod subsample
-                    parts.append(blk[s:end][start::subsample])
+                    # .copy() is load-bearing, not defensive: a strided slice is a VIEW that
+                    # keeps its whole (chunk_size-row) parent alive. Holding those views in
+                    # `parts` would pin every chunk ever read -- i.e. the entire block -- so
+                    # `subsample` would bound the OUTPUT but not the MEMORY (87 GB of Position
+                    # at 1536^3). Copying releases each chunk at the end of its iteration.
+                    parts.append(blk[s:end][start::subsample].copy())
                 data[col] = np.concatenate(parts) if parts else blk[0:0]
         if "Velocity" in data:
             if velocity == "peculiar_kms":

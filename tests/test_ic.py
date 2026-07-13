@@ -4,7 +4,9 @@ Local IC bigfiles are empty skeletons (mid-transfer), so these build a tiny
 SYNTHETIC bigfile with the real block/Header layout and exercise the loader
 end-to-end. Requires the optional ``bigfile`` dependency.
 """
+import gc
 import math
+import tracemalloc
 
 import numpy as np
 import pytest
@@ -275,6 +277,51 @@ def test_load_ic_particles_subsample(tmp_path):
     p = _make_ic_bigfile(tmp_path / "ic", ngrid=8)
     data, _ = ic.load_ic_particles(p, ptype="dm", columns=("Position",), subsample=4)
     assert data["Position"].shape[0] == 8 ** 3 // 4
+
+
+def test_subsample_bounds_peak_memory_not_just_row_count(tmp_path):
+    """``subsample`` must bound MEMORY, not just the row count.
+
+    A strided slice of a chunk is a *view* that keeps its whole parent chunk
+    alive. If those views are accumulated instead of copies, the loop pins every
+    chunk it has read — i.e. the entire on-disk block — so a "memory-aware"
+    subsample of a 1536^3 IC would still hold 87 GB of ``Position`` resident and
+    OOM the login node the README recommends.
+
+    Measured on the real 512^3 IC, the view version peaked at 3.26 GB (the whole
+    Position block) to return 67k particles; copying each slice dropped it to
+    0.31 GB.
+
+    NOTE: this cannot be asserted on the *returned* array — ``np.concatenate``
+    always yields a fresh owning array, so the result looks innocent either way.
+    The leak lives in the per-chunk list, so we measure peak allocation.
+    """
+    # subsample must be large enough that the OUTPUT is small compared to the
+    # block: np.concatenate transiently holds the parts plus the result, so a
+    # small subsample would put the honest peak near block/2 all by itself.
+    ngrid, chunk_size, subsample = 32, 512, 16
+    npart = ngrid ** 3
+    block_bytes = npart * 3 * 8            # Position is (N,3) float64
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=ngrid)
+
+    gc.collect()
+    tracemalloc.start()
+    try:
+        data, _ = ic.load_ic_particles(
+            p, ptype="dm", columns=("Position",),
+            subsample=subsample, chunk_size=chunk_size,
+        )
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert data["Position"].shape[0] == npart // subsample
+    # Pinning the views peaks at ~block_bytes (every chunk stays alive); copying
+    # peaks at ~one chunk + a couple of copies of the small output.
+    assert peak < block_bytes / 3, (
+        f"peak {peak / 1e6:.3f} MB vs full block {block_bytes / 1e6:.3f} MB — the strided "
+        f"slices are pinning their parent chunks, so subsample does not bound memory"
+    )
 
 
 def test_load_ic_particles_missing_column_raises(tmp_path):

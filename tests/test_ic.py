@@ -393,3 +393,30 @@ def test_velocity_mesh_missing_block_raises(tmp_path):
     p = _make_ic_bigfile(tmp_path / "ic", ngrid=4)           # no Velocity written
     with pytest.raises(ValueError, match="Velocity"):
         ic.load_ic_velocity_mesh(p, ptype="dm", nmesh=4)
+
+
+def test_velocity_mesh_chunked_matches_unchunked(tmp_path):
+    """Accumulating velocity across multiple chunks gives the same result as
+    a single large chunk. Verifies the accumulator is not reset per chunk."""
+    # Create random per-particle velocities (uniform would not catch reset bugs)
+    rng = np.random.RandomState(42)
+    n = 8 ** 3
+    v_data = (rng.randn(n, 3) * 30.0).astype("f4")
+
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=8, time=0.01, velocities=v_data,
+                         use_peculiar_velocity=1)
+
+    # Load with small chunk_size (forces many iterations)
+    chunked_vel = ic.load_ic_velocity_mesh(p, ptype="dm", nmesh=8, field="velocity",
+                                           chunk_size=37)
+    # Load with large chunk_size (single or few iterations)
+    full_vel = ic.load_ic_velocity_mesh(p, ptype="dm", nmesh=8, field="velocity",
+                                        chunk_size=10 ** 9)
+    np.testing.assert_allclose(chunked_vel.v, full_vel.v, rtol=1e-5)
+
+    # Also verify momentum field gives same result
+    chunked_mom = ic.load_ic_velocity_mesh(p, ptype="dm", nmesh=8, field="momentum",
+                                           chunk_size=37)
+    full_mom = ic.load_ic_velocity_mesh(p, ptype="dm", nmesh=8, field="momentum",
+                                        chunk_size=10 ** 9)
+    np.testing.assert_allclose(chunked_mom.v, full_mom.v, rtol=1e-5)

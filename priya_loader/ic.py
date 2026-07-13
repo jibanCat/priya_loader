@@ -116,6 +116,7 @@ def load_ic_particles(
     columns=("Position",),
     subsample: int = 1,
     chunk_size: int = 8_000_000,
+    velocity: str = "peculiar_kms",
 ):
     """Load **raw** IC particle columns — NO meshing — so you can paint with your
     own CIC (nbodykit / Pylians) or use the positions directly.
@@ -129,21 +130,34 @@ def load_ic_particles(
     ----------
     ic_dir, ptype : as :func:`load_ic_density`.
     columns : tuple of {"Position", "Velocity", "ICDensity", "ID"}
-        Blocks to read. ``Position`` is comoving kpc/h.
+        Blocks to read. ``Position`` is comoving kpc/h. ``Velocity`` is peculiar
+        km/s by default (see ``velocity``).
     subsample : int
         Keep every ``subsample``-th particle (strided, memory-aware). For a full
         1536^3/3072^3 load prefer a compute node or ``nbodykit.BigFileCatalog``.
+    velocity : {"peculiar_kms", "raw"}
+        How to return the ``Velocity`` column (ignored if ``"Velocity"`` is not
+        in ``columns``). ``"peculiar_kms"`` (default) converts the stored block
+        to physical peculiar km/s by dispatching on the IC Header's
+        ``UsePeculiarVelocity`` flag (see :func:`priya_loader.units.
+        ic_velocity_to_peculiar_kms`); PRIYA sets this flag to 1, so PRIYA
+        velocities are guaranteed to come back unchanged. ``"raw"`` returns the
+        stored block unmodified, whatever its convention. If the flag is absent
+        from the Header, ``"peculiar_kms"`` raises rather than guessing.
 
     Returns
     -------
     (data, header) : (dict[str, np.ndarray], dict)
         ``data[col]`` arrays; ``header`` has ``box_mpc_h``, ``box_kpc_h``,
-        ``hubble``, ``redshift``.
+        ``hubble``, ``redshift``, ``scale_factor``, ``use_peculiar_velocity``,
+        ``velocity_units``.
     """
     if ptype not in PTYPE:
         raise ValueError(f"ptype must be one of {sorted(PTYPE)}; got {ptype!r}")
     if subsample < 1:
         raise ValueError(f"subsample must be >= 1; got {subsample}")
+    if velocity not in ("peculiar_kms", "raw"):
+        raise ValueError(f"velocity must be 'peculiar_kms' or 'raw'; got {velocity!r}")
     try:
         import bigfile
     except ImportError as e:  # pragma: no cover
@@ -162,17 +176,26 @@ def load_ic_particles(
         except Exception as e:
             raise ValueError(f"{ic_dir}: cannot read IC Header ({e!r}); skeleton/corrupt?") from e
         box_kpc_h = _attr(attrs, "BoxSize") if "BoxSize" in keys else float("nan")
+        time = _attr(attrs, "Time") if "Time" in keys else None
         if "Redshift" in keys:
             redshift = _attr(attrs, "Redshift")
-        elif "Time" in keys:
-            redshift = units.scale_factor_to_redshift(_attr(attrs, "Time"))
+        elif time is not None:
+            redshift = units.scale_factor_to_redshift(time)
         else:
             redshift = float("nan")
+        if time is None and np.isfinite(redshift):
+            time = units.redshift_to_scale_factor(redshift)
+        upv = int(_attr(attrs, "UsePeculiarVelocity")) if "UsePeculiarVelocity" in keys else None
         header = {
             "box_kpc_h": box_kpc_h,
             "box_mpc_h": units.kpc_h_to_mpc_h(box_kpc_h),
             "hubble": _attr(attrs, "HubbleParam") if "HubbleParam" in keys else None,
             "redshift": redshift,
+            "scale_factor": time,
+            "use_peculiar_velocity": upv,
+            "velocity_units": (
+                "km/s (peculiar)" if velocity == "peculiar_kms" else "raw (as stored)"
+            ),
         }
         for col in columns:
             name = f"{t}/{col}"
@@ -189,6 +212,10 @@ def load_ic_particles(
                     start = (-s) % subsample            # keep global indices == 0 mod subsample
                     parts.append(blk[s:end][start::subsample])
                 data[col] = np.concatenate(parts) if parts else blk[0:0]
+        if "Velocity" in data and velocity == "peculiar_kms":
+            data["Velocity"] = units.ic_velocity_to_peculiar_kms(
+                data["Velocity"], time, upv,
+            ).astype("f4", copy=False)
     return data, header
 
 

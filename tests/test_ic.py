@@ -16,7 +16,8 @@ from priya_loader import ic, mesh
 
 def _make_ic_bigfile(path, ngrid=8, box=120000.0, ptypes=(1,), redshift=99.0,
                      time=None, clustered=False, with_boxsize=True, positions=None,
-                     with_icdensity=False, id_offset=0, shuffle=False, gap_ids=False):
+                     with_icdensity=False, id_offset=0, shuffle=False, gap_ids=False,
+                     velocities=None, use_peculiar_velocity=1):
     """Write a tiny IC bigfile. Particles on a regular ngrid^3 lattice at cell
     centres (=> uniform density), unless ``clustered`` or explicit ``positions``.
 
@@ -44,6 +45,11 @@ def _make_ic_bigfile(path, ngrid=8, box=120000.0, ptypes=(1,), redshift=99.0,
     with bigfile.File(str(path), create=True) as bf:
         for t in ptypes:
             bf.create_from_array(f"{t}/Position", pos)
+            if velocities is not None:
+                vel = np.asarray(velocities, "f4")
+                if vel.ndim == 1:                      # broadcast a single (3,) vector
+                    vel = np.tile(vel, (n, 1)).astype("f4")
+                bf.create_from_array(f"{t}/Velocity", vel)
             if with_icdensity:
                 bf.create_from_array(f"{t}/ID", ids)
                 bf.create_from_array(f"{t}/ICDensity", icdensity)
@@ -58,6 +64,8 @@ def _make_ic_bigfile(path, ngrid=8, box=120000.0, ptypes=(1,), redshift=99.0,
         h.attrs["HubbleParam"] = 0.7
         h.attrs["Omega0"] = 0.3
         h.attrs["OmegaLambda"] = 0.7
+        if use_peculiar_velocity is not None:
+            h.attrs["UsePeculiarVelocity"] = np.array([use_peculiar_velocity], dtype="i4")
     return path
 
 
@@ -265,3 +273,60 @@ def test_load_ic_particles_missing_column_raises(tmp_path):
     p = _make_ic_bigfile(tmp_path / "ic", ngrid=8, with_icdensity=False)
     with pytest.raises(ValueError):
         ic.load_ic_particles(p, ptype="dm", columns=("ICDensity",))
+
+
+# --- velocity conversion (UsePeculiarVelocity dispatch) ------------------------
+def test_velocity_peculiar_flag_returned_unchanged(tmp_path):
+    """PRIYA case: UsePeculiarVelocity=1 => the block is already peculiar km/s."""
+    v = np.array([3.0, -4.0, 12.0], dtype="f4")
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=4, time=0.01, velocities=v,
+                         use_peculiar_velocity=1)
+    data, header = ic.load_ic_particles(p, ptype="dm", columns=("Position", "Velocity"))
+    np.testing.assert_allclose(data["Velocity"], np.tile(v, (4 ** 3, 1)), rtol=1e-6)
+    assert header["use_peculiar_velocity"] == 1
+    assert header["velocity_units"] == "km/s (peculiar)"
+    assert header["scale_factor"] == pytest.approx(0.01)
+
+
+def test_velocity_gadget2_flag_is_scaled_by_sqrt_a(tmp_path):
+    """UsePeculiarVelocity=0 => stored is v/sqrt(a); loader must multiply by sqrt(a)."""
+    v = np.array([3.0, -4.0, 12.0], dtype="f4")
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=4, time=0.01, velocities=v,
+                         use_peculiar_velocity=0)
+    data, header = ic.load_ic_particles(p, ptype="dm", columns=("Position", "Velocity"))
+    np.testing.assert_allclose(data["Velocity"], np.tile(v * 0.1, (4 ** 3, 1)), rtol=1e-5)
+    assert header["use_peculiar_velocity"] == 0
+
+
+def test_velocity_raw_returns_stored_block(tmp_path):
+    v = np.array([3.0, -4.0, 12.0], dtype="f4")
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=4, time=0.01, velocities=v,
+                         use_peculiar_velocity=0)
+    data, header = ic.load_ic_particles(p, ptype="dm", columns=("Velocity",), velocity="raw")
+    np.testing.assert_allclose(data["Velocity"], np.tile(v, (4 ** 3, 1)), rtol=1e-6)
+    assert header["velocity_units"] == "raw (as stored)"
+
+
+def test_velocity_without_flag_raises(tmp_path):
+    """Never guess the convention: no flag in the Header => refuse to convert."""
+    v = np.array([3.0, -4.0, 12.0], dtype="f4")
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=4, time=0.01, velocities=v,
+                         use_peculiar_velocity=None)
+    with pytest.raises(ValueError, match="UsePeculiarVelocity"):
+        ic.load_ic_particles(p, ptype="dm", columns=("Velocity",))
+    # ...but 'raw' still works, since no conversion is implied.
+    data, _ = ic.load_ic_particles(p, ptype="dm", columns=("Velocity",), velocity="raw")
+    assert data["Velocity"].shape == (4 ** 3, 3)
+
+
+def test_position_only_load_needs_no_velocity_flag(tmp_path):
+    """A Position-only load must not be broken by a missing velocity flag."""
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=4, use_peculiar_velocity=None)
+    data, _ = ic.load_ic_particles(p, ptype="dm", columns=("Position",))
+    assert data["Position"].shape == (4 ** 3, 3)
+
+
+def test_bad_velocity_kwarg_raises(tmp_path):
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=4)
+    with pytest.raises(ValueError, match="velocity must be"):
+        ic.load_ic_particles(p, ptype="dm", velocity="nonsense")

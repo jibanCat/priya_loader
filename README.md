@@ -167,7 +167,8 @@ no meshing:
 from priya_loader import load_ic_particles
 data, header = load_ic_particles(ic_dir, ptype="dm", columns=("Position",), subsample=1)
 data["Position"]        # (N, 3) comoving kpc/h ; also "Velocity"/"ICDensity"/"ID"
-# header: box_mpc_h, hubble, redshift
+# header: box_kpc_h, box_mpc_h, hubble, redshift, scale_factor,
+#         use_peculiar_velocity, velocity_units, Omega0, OmegaLambda
 ```
 
 (Our built-in CIC is verified bit-for-bit vs an explicit reference, and to float32 roundoff vs Pylians;
@@ -187,6 +188,63 @@ nbodykit's compensation/interlacing are opt-in "tricks" we don't apply.)
 Peak ≈ `2·nmesh³` float64 (mesh + one transient bincount) + ~1 GB chunk; **use
 `nmesh ≤ 512` on a login node** (for `cic`, `480` matches the τ transverse grid;
 for `icdensity` use a divisor of `ngrid` — see the warning above).
+
+### Dark matter positions & velocities
+
+The IC bigfile carries the particle `Position` and `Velocity` for both species
+(`ptype="dm"` = type 1, `ptype="gas"` = type 0):
+
+```python
+from priya_loader import load_ic_particles
+
+data, header = load_ic_particles(
+    ic_dir,                                   # <sim>/ICS/120_512_99
+    ptype="dm",
+    columns=("Position", "Velocity"),
+    subsample=8,                              # keep every 8th particle
+)
+data["Position"]   # (N, 3) comoving kpc/h
+data["Velocity"]   # (N, 3) PECULIAR km/s
+header["redshift"] # ~99  (the IC redshift)
+```
+
+**Units — the one thing to get right.** MP-GenIC can write velocities in either
+of two conventions, and it records which one in the IC header
+(`UsePeculiarVelocity`). PRIYA's ICs use the peculiar-km/s convention, so the
+stored block needs **no** `sqrt(a)` rescaling — applying the Gadget-2 `sqrt(a)`
+factor anyway would make the velocities **10x too small at z=99**. The loader
+reads the header flag and returns peculiar km/s either way; pass
+`velocity="raw"` if you want the stored block untouched. If the flag is missing,
+the loader raises rather than guess.
+
+Gas and DM velocities are **not** the same field: PRIYA runs GenIC with
+`DifferentTransferFunctions = 1`, so each species is drawn from its own CLASS
+velocity transfer function (and `v` is *not* just a rescaled Zel'dovich
+displacement).
+
+**Only the ICs have particles.** MP-Gadget was configured to write snapshots
+(`output/PART_*`), but the PRIYA archive kept only the Lyman-alpha spectra — so
+z ≈ 99 is the only redshift at which particle positions/velocities exist.
+
+For the velocity as a *field* rather than particles:
+
+```python
+from priya_loader import load_ic_velocity_mesh
+
+vf = load_ic_velocity_mesh(ic_dir, ptype="dm", nmesh=256, field="velocity")
+vf.v            # (3, 256, 256, 256) float32, peculiar km/s, [component][x,y,z]
+vf.meta["empty_cells"]   # 0 unless nmesh is finer than the particle grid
+```
+
+`field="momentum"` returns the un-normalised CIC momentum (linear in `v`; prefer
+it for Fourier work). The mesh shares the origin and axis order of
+`load_ic_density`, so it co-registers with the density field.
+
+**Memory (raw particles).** The staged low-res IC is 512³ = 1.34e8 particles:
+`Position` (f8) is 3.2 GB and `Velocity` (f4) 1.6 GB for a full load — use
+`subsample` on a login node. The 3072³ hi-res IC (2.9e10 particles) cannot be
+loaded as raw particles at all; use `load_ic_velocity_mesh` / `load_ic_density`
+(streamed) on a compute node.
 
 ### Why a `runconfig` module?
 

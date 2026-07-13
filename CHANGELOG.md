@@ -6,6 +6,14 @@ All notable changes to `priya_loader`. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- `load_ic_velocity_mesh` — CIC velocity/momentum field from the IC particles
+  (`(3, nmesh, nmesh, nmesh)`, peculiar km/s, co-registered with `load_ic_density`);
+  `ICVelocityField`.
+- `units.ic_velocity_to_peculiar_kms` — converts a stored IC `Velocity` block to
+  peculiar km/s by dispatching on the IC header's `UsePeculiarVelocity` flag.
+- `notebooks/ic_particles.ipynb` — short demo of DM positions/velocities.
+- Real-IC test asserting `v_rms` matches linear theory `a·H·f·σ_disp` (catches a
+  `sqrt(a)` units error, which is a 10× effect at z=99).
 - `tests/test_real_ic.py` — real-IC verification, gated behind `PRIYA_REAL_IC`
   (skips by default). Codifies the NERSC sign-off the synthetic fixtures can't
   reach: resolution/box invariants, the linear `δ₁` (`icdensity`) and Eulerian
@@ -23,6 +31,12 @@ All notable changes to `priya_loader`. Format loosely follows
   bigfile pins); corrected the `A_p` pivot label (8 Mpc scale, `k≈0.785 Mpc⁻¹`).
 
 ### Changed
+- **`load_ic_particles` now returns `Velocity` in peculiar km/s by default**
+  (`velocity="peculiar_kms"`; pass `velocity="raw"` for the stored block). It reads
+  `UsePeculiarVelocity` from the IC header and **raises** if a conversion is
+  requested and the flag is absent. For PRIYA the flag is 1, so the *values* are
+  unchanged — what is new is the guarantee and the metadata (`scale_factor`,
+  `use_peculiar_velocity`, `velocity_units` in the returned header).
 - `notebooks/quickstart.ipynb` rewritten as a step-by-step **pedagogical** tutorial
   for users new to MP-Gadget: it defaults to the staged NERSC PRIYA path, makes
   explicit that the low-res ICs are **512³**, and walks through loader usage plus

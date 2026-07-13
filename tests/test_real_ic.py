@@ -286,6 +286,12 @@ def test_real_ic_velocity_matches_linear_theory(real_ic_particles_posvel):
                   lag % ngrid], axis=1) * (box_kpc_h / ngrid)
     d = pos - q
     d -= box_kpc_h * np.round(d / box_kpc_h)            # periodic minimum image
+    # MP-GenIC writes Pos = q + shift(species) + Psi: each species is offset from the
+    # Lagrangian grid by a CONSTANT (genic/main.c:63-64, shift_dm = 0.5*Omega_b/Omega0
+    # * meanspacing = 18.05 kpc/h here). That shift is not part of Psi and carries no
+    # velocity, so leaving it in inflates sigma_disp (128.5 -> 124.9 kpc/h once removed)
+    # and biases the ratio low. Subtract the per-axis mean to drop it.
+    d -= d.mean(axis=0)
     sigma_disp = float(np.sqrt((d ** 2).sum(axis=1).mean()))      # kpc/h, 3D rms
 
     # a*H(a)*f * Psi. hubble_z returns H in km/s/Mpc (physical Mpc; h is already

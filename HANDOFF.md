@@ -59,9 +59,10 @@ we ship raw (no nbodykit compensation/interlacing).
   `SimulationICs.json` (whose `box`/`npart` read a stale `15`/`192` for ~half the
   suite). This is handled for you.
 - **Particles exist only in the ICs.** `output/PART_*` snapshots were configured
-  in `mpgadget.param` (see `output/Snapshots.txt`, 24 outputs at a=0.1→0.333) but
-  are **not** in the archive — only the spectra were kept. So DM/gas positions and
-  velocities are available at z≈99 and nowhere else.
+  in `mpgadget.param` (each sim's `output/Snapshots.txt` lists its own output times,
+  ~22–25 of them between a≈0.1 and a≈0.31–0.33) but are **not** in the archive —
+  only the spectra were kept. So DM/gas positions and velocities are available at
+  z≈99 and nowhere else.
 - IC velocities are **peculiar km/s** (`UsePeculiarVelocity=1`); do not apply the
   Gadget-2 `sqrt(a)`. `load_ic_particles` reads the header flag for you.
 

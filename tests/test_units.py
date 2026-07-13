@@ -123,3 +123,23 @@ def test_growth_rate_approx():
     om, ol = 0.3, 0.7
     assert units.growth_rate(0.0, om, ol) == pytest.approx(0.3 ** 0.55, rel=1e-6)
     assert units.growth_rate(5.0, om, ol) > 0.95            # -> 1 in matter domination
+
+
+def test_ic_velocity_peculiar_flag_is_identity():
+    # UsePeculiarVelocity=1 (the PRIYA case): the block is ALREADY peculiar km/s.
+    v = np.array([[1.0, -2.0, 3.0]], dtype="f4")
+    out = units.ic_velocity_to_peculiar_kms(v, scale_factor=0.01, use_peculiar_velocity=1)
+    np.testing.assert_allclose(out, v)
+
+
+def test_ic_velocity_gadget2_flag_applies_sqrt_a():
+    # UsePeculiarVelocity=0: stored is v/sqrt(a) (Gadget-2), so multiply by sqrt(a).
+    v = np.array([[1.0, -2.0, 3.0]], dtype="f4")
+    out = units.ic_velocity_to_peculiar_kms(v, scale_factor=0.01, use_peculiar_velocity=0)
+    np.testing.assert_allclose(out, v * 0.1, rtol=1e-6)
+
+
+def test_ic_velocity_raises_when_flag_unknown():
+    # Never guess a unit convention.
+    with pytest.raises(ValueError, match="UsePeculiarVelocity"):
+        units.ic_velocity_to_peculiar_kms(np.zeros((1, 3)), 0.01, use_peculiar_velocity=None)

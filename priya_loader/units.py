@@ -144,8 +144,52 @@ def gadget_velocity_to_peculiar_kms(velocity_stored, scale_factor):
     velocities; if the IC header attr ``UsePeculiarVelocity == 1`` the stored
     ``Velocity`` is already peculiar km/s and must NOT be multiplied by sqrt(a).
     Check that attr in the IC loader before calling this.
+
+    **Do not call this directly on a PRIYA IC.** It is the low-level ``sqrt(a)``
+    primitive (the Gadget-2 convention). Call
+    :func:`ic_velocity_to_peculiar_kms`, which dispatches on the IC Header's
+    ``UsePeculiarVelocity`` flag; PRIYA's ICs set it to 1, so their velocities are
+    already peculiar km/s and this ``sqrt(a)`` factor must NOT be applied.
     """
     return velocity_stored * np.sqrt(scale_factor)
+
+
+def ic_velocity_to_peculiar_kms(velocity_stored, scale_factor, use_peculiar_velocity):
+    """Peculiar velocity [km/s] from the stored IC ``Velocity`` block, dispatching
+    on the IC Header's ``UsePeculiarVelocity`` flag.
+
+    MP-GenIC writes ``vel_prefac = a * H(a)`` and divides by ``sqrt(a)`` **only**
+    when ``UsePeculiarVelocity == 0`` (``libgenic/zeldovich.c:195-202`` @ 12f2c82a):
+
+    ==== =========================== =========================
+    flag stored quantity             conversion to peculiar
+    ==== =========================== =========================
+    1    ``v_pec``           [km/s]  identity
+    0    ``v_pec / sqrt(a)``         multiply by ``sqrt(a)``
+    ==== =========================== =========================
+
+    The flag is saved into the IC Header (``libgenic/save.c:128``), so it is read,
+    never assumed. **PRIYA's ICs have flag = 1** (GenIC's declared default,
+    ``genic/params.c:52``; PRIYA's ``_genic_params.ini`` does not set it) — i.e.
+    their ``Velocity`` block is already peculiar km/s, and applying ``sqrt(a)`` to
+    it would be a **10x error at z=99**.
+
+    Raises
+    ------
+    ValueError
+        If ``use_peculiar_velocity`` is None (flag absent from the Header): the
+        convention is then unknowable and guessing it silently corrupts velocities.
+    """
+    if use_peculiar_velocity is None:
+        raise ValueError(
+            "cannot convert IC velocities: the Header has no 'UsePeculiarVelocity' "
+            "attr, so the stored convention is unknown (peculiar km/s vs v/sqrt(a)). "
+            "Pass velocity='raw' to get the stored block unmodified."
+        )
+    v = np.asarray(velocity_stored)
+    if int(use_peculiar_velocity):
+        return v                                   # already peculiar km/s
+    return gadget_velocity_to_peculiar_kms(v, scale_factor)
 
 
 # --- mass ---------------------------------------------------------------------

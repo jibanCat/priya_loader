@@ -514,6 +514,99 @@ def test_velocity_mesh_units_string_matches_the_field(tmp_path):
     np.testing.assert_allclose(mom4.v[0], 10.0 * 8, rtol=1e-4)      # x 8 particles/cell
 
 
+def _bare_ic(path, npos, nvel, flag=1):
+    """An IC with explicit block lengths -- for skeleton / mid-transfer cases."""
+    with bigfile.File(str(path), create=True) as bf:
+        bf.create_from_array("1/Position", np.zeros((npos, 3), "f8"))
+        bf.create_from_array("1/Velocity", np.zeros((nvel, 3), "f4"))
+        with bf.create("Header") as h:      # attrs must be set on the create() handle
+            h.attrs["BoxSize"] = 120000.0
+            h.attrs["Time"] = 0.01
+            h.attrs["Redshift"] = 99.0
+            if flag is not None:
+                h.attrs["UsePeculiarVelocity"] = np.array([flag], dtype="i4")
+    return path
+
+
+def test_velocity_mesh_raises_on_empty_skeleton_ic(tmp_path):
+    """A skeleton IC must RAISE, not return a zero cube labelled km/s.
+
+    Empty-skeleton ICs are the normal mid-transfer state of this archive. The
+    conversion lives inside the chunk loop, so with zero particles the loop never
+    ran: the loader returned an all-zero field stamped "km/s (peculiar)" with the
+    header flag never even read -- asserting a unit it never applied, on data that
+    does not exist. A user looping over sims would have silently gotten v_rms = 0
+    and zero cross-spectra. load_ic_density already raises here.
+    """
+    p = _bare_ic(tmp_path / "skeleton", 0, 0, flag=None)
+    with pytest.raises(ValueError, match="empty|skeleton"):
+        ic.load_ic_velocity_mesh(p, ptype="dm", nmesh=4, field="velocity")
+    with pytest.raises(ValueError, match="empty|skeleton"):
+        ic.load_ic_velocity_mesh(p, ptype="dm", nmesh=4, field="momentum")
+
+
+def test_velocity_mesh_raises_on_missing_velocity_flag(tmp_path):
+    """A flag-less IC must raise rather than guess the velocity convention.
+
+    (The loader also validates the flag *before* the chunk loop, so it fails fast
+    instead of first reading an 8M-row chunk. That's a latency/IO property this test
+    does not attempt to assert — it pins the observable behaviour: it raises.)
+    """
+    p = _bare_ic(tmp_path / "noflag", 8, 8, flag=None)
+    with pytest.raises(ValueError, match="UsePeculiarVelocity"):
+        ic.load_ic_velocity_mesh(p, ptype="dm", nmesh=4)
+
+
+def test_load_ic_particles_rejects_ragged_columns(tmp_path):
+    """Position(100) + Velocity(60) must raise, not silently row-misalign.
+
+    On a mid-transfer IC the blocks are written incrementally, so they can differ in
+    length. Returning them as-is attaches velocities to the WRONG particles -- a
+    silently wrong velocity field. load_ic_velocity_mesh already guards this.
+    """
+    p = _bare_ic(tmp_path / "ragged", 100, 60)
+    with pytest.raises(ValueError, match="different lengths|partially written"):
+        ic.load_ic_particles(p, ptype="dm", columns=("Position", "Velocity"))
+    # a single column is still fine -- nothing to misalign
+    data, _ = ic.load_ic_particles(p, ptype="dm", columns=("Position",))
+    assert data["Position"].shape == (100, 3)
+
+
+def test_momentum_to_kms_recipe_in_the_docstring_actually_works(tmp_path):
+    """The documented momentum -> km/s recovery must reproduce the input velocity.
+
+    `1 + delta` is the count grid normalised by its MEAN, so dividing the momentum
+    by `1 + delta` alone leaves the mean-particles-per-cell factor in (~64x at
+    nmesh=128 on a 512^3 IC). meta["mean_particles_per_cell"] is the missing factor.
+    """
+    v0 = 10.0
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=8, time=0.01,
+                         velocities=np.array([v0, 0.0, 0.0], dtype="f4"),
+                         use_peculiar_velocity=1)
+    nmesh = 4                                        # 8^3 particles onto 4^3 cells => 8 per cell
+    mom = ic.load_ic_velocity_mesh(p, ptype="dm", nmesh=nmesh, field="momentum")
+    cic = ic.load_ic_density(p, ptype="dm", nmesh=nmesh, field="cic")
+
+    assert mom.meta["mean_particles_per_cell"] == pytest.approx(8 ** 3 / nmesh ** 3)
+    counts = (1.0 + cic.delta) * mom.meta["mean_particles_per_cell"]
+    v_kms = mom.v[0] / np.where(counts > 0, counts, 1.0)
+    np.testing.assert_allclose(v_kms, v0, rtol=1e-4)
+
+    # the naive divisor (the recipe we shipped before) is wrong by the mean count
+    naive = mom.v[0] / (1.0 + cic.delta)
+    assert not np.allclose(naive, v0, rtol=1e-2)
+
+
+def test_velocity_field_units_derived_from_field(tmp_path):
+    """A hand-constructed ICVelocityField must not default to km/s for momentum."""
+    z = np.zeros((3, 2, 2, 2), dtype="f4")
+    assert ic.ICVelocityField(v=z, nmesh=2, box=120.0, ptype="dm", redshift=99.0,
+                              field="velocity", npart=8).units == "km/s (peculiar)"
+    mom = ic.ICVelocityField(v=z, nmesh=2, box=120.0, ptype="dm", redshift=99.0,
+                             field="momentum", npart=8)
+    assert "un-normalised" in mom.units and mom.units != "km/s (peculiar)"
+
+
 def test_velocity_mesh_bad_field_raises(tmp_path):
     p = _make_ic_bigfile(tmp_path / "ic", ngrid=4, velocities=np.zeros(3))
     with pytest.raises(ValueError, match="field must be"):

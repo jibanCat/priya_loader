@@ -95,6 +95,13 @@ StrPath = Union[str, os.PathLike]
 #: particle-type name -> bigfile block prefix (MP-Gadget convention: 0 gas, 1 DM)
 PTYPE = {"gas": 0, "dm": 1}
 
+#: the honest unit label for each ``load_ic_velocity_mesh`` field. Single source of
+#: truth: the "momentum" branch is an un-normalised CIC sum, NOT km/s.
+UNITS_BY_FIELD = {
+    "velocity": "km/s (peculiar)",
+    "momentum": "km/s (peculiar) x particles-per-cell (un-normalised CIC sum)",
+}
+
 
 @dataclass
 class ICField:
@@ -135,10 +142,17 @@ class ICVelocityField:
     redshift: float              # IC redshift (z_init, ~99)
     field: str                   # "velocity" (p/n) | "momentum" (p)
     npart: int
-    units: str = "km/s (peculiar)"
+    units: str = ""              # derived from `field` when not given (see __post_init__)
     axes: tuple = ("x", "y", "z")
     space: str = "real"
     meta: Dict[str, Any] = dc_field(default_factory=dict, repr=False)
+
+    def __post_init__(self):
+        # `units` must never default to km/s: the "momentum" branch is not in km/s,
+        # and `field` is required, so we can always derive the honest label. A plain
+        # default would silently mislabel any momentum field a consumer reconstructs.
+        if not self.units:
+            self.units = UNITS_BY_FIELD[self.field]
 
 
 def load_ic_particles(
@@ -236,12 +250,26 @@ def load_ic_particles(
             "Omega0": omega0,
             "OmegaLambda": omega_lambda,
         }
+        # All requested columns describe the SAME particles, so they must be the same
+        # length. On a mid-transfer IC (the normal state of this archive) they need
+        # not be — and returning e.g. Position(100) with Velocity(60) would silently
+        # attach velocities to the wrong particles. Check before reading anything.
+        sizes = {}
         for col in columns:
             name = f"{t}/{col}"
             if name not in bf.blocks:
                 raise ValueError(f"{ic_dir}: no '{name}' block (ptype={ptype!r}, column={col!r})")
+            sizes[col] = int(bf[name].size)
+        if len(set(sizes.values())) > 1:
+            raise ValueError(
+                f"{ic_dir}: requested columns have different lengths {sizes} — they index the "
+                f"same particles, so this IC is partially written (skeleton/mid-transfer)"
+            )
+
+        for col in columns:
+            name = f"{t}/{col}"
             blk = bf[name]
-            n = int(blk.size)
+            n = sizes[col]
             if subsample == 1:
                 data[col] = blk[:]
             else:
@@ -502,10 +530,17 @@ def load_ic_velocity_mesh(
         — linear in ``v``, so this is the field to Fourier transform for a
         momentum / velocity-divergence spectrum without the ``p/n`` ratio's noise
         in low-density cells. Its units are **km/s x particles-per-cell**, NOT
-        km/s: at ``nmesh=128`` on a 512^3 IC that is ~64x the velocity. Divide by
-        the CIC counts — ``1 + delta`` from ``load_ic_density(field="cic")`` on
-        the same ``nmesh`` is exactly the normalised count grid — to recover km/s.
-        ``ICVelocityField.units`` reports which of the two you got.
+        km/s: at ``nmesh=128`` on a 512^3 IC that is ~64x the velocity.
+        To recover km/s, divide by the CIC **counts**::
+
+            cic = load_ic_density(ic_dir, ptype=..., nmesh=nmesh, field="cic")
+            counts = (1.0 + cic.delta) * vf.meta["mean_particles_per_cell"]
+            v_kms = vf.v / np.where(counts > 0, counts, 1.0)
+
+        Note the ``mean_particles_per_cell`` factor: ``1 + delta`` is the count grid
+        normalised by its **mean**, so dividing by ``1 + delta`` alone leaves the
+        mean count in and overstates the velocity by exactly that factor.
+        ``ICVelocityField.units`` reports which of the two fields you got.
 
     Velocities are peculiar km/s: the IC Header's ``UsePeculiarVelocity`` flag is
     read and applied (see :func:`priya_loader.units.ic_velocity_to_peculiar_kms`).
@@ -579,6 +614,18 @@ def load_ic_velocity_mesh(
             raise ValueError(
                 f"{ic_dir}: Position ({npart}) and Velocity ({vblk.size}) sizes differ"
             )
+        if npart == 0:
+            # An empty-skeleton IC (the normal mid-transfer state of this archive).
+            # Without this, the chunk loop below never runs, so we would return an
+            # all-zero cube stamped "km/s (peculiar)" — a unit we never applied, on
+            # data that does not exist. load_ic_density raises here too.
+            raise ValueError(
+                f"{ic_dir}: '{t}/Position' is empty (0 particles); skeleton/mid-transfer IC?"
+            )
+        # Validate the velocity convention BEFORE the loop: the conversion lives
+        # inside it, so a flag-less IC would otherwise only raise once the first
+        # chunk is read — and never at all if there were no chunks.
+        units.ic_velocity_to_peculiar_kms(np.zeros((0, 3), "f4"), time, upv)
 
         mom = np.zeros((3, nmesh, nmesh, nmesh), dtype=np.float64)
         cnt = np.zeros((nmesh, nmesh, nmesh), dtype=np.float64)
@@ -612,15 +659,15 @@ def load_ic_velocity_mesh(
         redshift=redshift,
         field=field,
         npart=npart,
-        # NEVER assert a unit we did not apply: the "momentum" branch is the raw
-        # CIC sum, which is km/s x particles-per-cell, not km/s.
-        units=("km/s (peculiar)" if field == "velocity"
-               else "km/s (peculiar) x particles-per-cell (un-normalised CIC sum)"),
+        units=UNITS_BY_FIELD[field],   # never assert a unit we did not apply
         space="real",
         meta={
             "ic_dir": str(ic_dir),
             "cell_kpc_h": box_kpc_h / nmesh,
             "empty_cells": empty,
+            # The factor needed to turn field="momentum" back into km/s (see the
+            # docstring): counts = (1+delta_cic) * mean_particles_per_cell.
+            "mean_particles_per_cell": npart / float(nmesh ** 3),
             "use_peculiar_velocity": upv,
             "hubble": hubble,
             "Omega0": omega0,

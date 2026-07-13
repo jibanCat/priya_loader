@@ -30,16 +30,24 @@ equivalence on the full set (and keeps RAM bounded).
 
 Heavy loads (one full IC stream per mesh) are shared via module-scoped fixtures.
 
-All tests here use ``ptype="dm"`` (the total-matter proxy). The gas (type-0) route
-is code-symmetric (``PTYPE["gas"]=0``) and is covered on synthetic fixtures; it is
-not separately asserted against a real IC.
+All tests here use ``ptype="dm"`` — which is the **CDM** field, not total matter
+(each species carries its own CLASS transfer function; see ``ic.py``). The gas
+(type-0) route is code-symmetric (``PTYPE["gas"]=0``) and is covered on synthetic
+fixtures; it is not separately asserted against a real IC.
+
+The two ``@pytest.mark.slow`` tests at the bottom are the **cosmology guards**: they
+compare P(k) measured from the loaders against ``ICS/inputspec_*.txt`` — the linear
+spectrum MP-GenIC was actually handed — so any amplitude error (a stray sqrt(a), a
+missing 1/h, a bad growth rate, a mis-normalised momentum field) fails a test rather
+than quietly biasing someone's b_F. Each streams the full particle block (~5 min).
 """
 import os
 
 import numpy as np
 import pytest
 
-from priya_loader import load_ic_density, load_ic_particles, mesh, units
+from priya_loader import (load_ic_density, load_ic_particles, load_ic_velocity_mesh,
+                          mesh, units)
 from test_mesh import _explicit_cic   # reuse the transparent, dependency-free CIC reference
 
 REAL_IC = os.environ.get("PRIYA_REAL_IC")
@@ -335,3 +343,131 @@ def test_real_ic_gas_and_dm_velocities_differ():
     assert not np.allclose(gas["Velocity"][:n], dm["Velocity"][:n]), (
         "gas and DM IC velocities are identical — ScaleDepVelocity assumption is wrong"
     )
+
+
+# --- cosmology normalisation: P(k) vs the linear spectrum GenIC was handed --------
+def _binned_pk(field, nmesh, box_mpc_h):
+    """Binned P(k) [(Mpc/h)^3] of a real field on a periodic nmesh^3 box."""
+    f = np.asarray(field, dtype=np.float32)
+    f = f - f.mean()
+    F = np.fft.rfftn(f)
+    kf = 2 * np.pi / box_mpc_h
+    kx = np.fft.fftfreq(nmesh, d=1.0 / nmesh)[:, None, None] * kf
+    ky = np.fft.fftfreq(nmesh, d=1.0 / nmesh)[None, :, None] * kf
+    kz = np.fft.rfftfreq(nmesh, d=1.0 / nmesh)[None, None, :] * kf
+    kk = np.sqrt(kx ** 2 + ky ** 2 + kz ** 2)
+    P = (np.abs(F) ** 2) * (box_mpc_h ** 3 / nmesh ** 6)
+    bins = np.logspace(np.log10(kf), np.log10(0.5 * np.pi * nmesh / box_mpc_h), 16)
+    idx = np.digitize(kk.ravel(), bins)
+    kr, Pr = kk.ravel(), P.ravel()
+    ks, Ps = [], []
+    for b in range(1, len(bins)):
+        m = idx == b
+        if m.sum() > 8:
+            ks.append(kr[m].mean())
+            Ps.append(Pr[m].mean())
+    return np.array(ks), np.array(Ps)
+
+
+def _sim_dir():
+    """<sim>/ from <sim>/ICS/<box>_<ngrid>_99 — the inputspec/transfer files live there."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(REAL_IC)))
+
+
+def _input_pk():
+    """The linear P(k) MP-GenIC was handed: ICS/inputspec_<base>.txt.
+    genic/main.c: col1 = k [h/Mpc], col2 = DeltaSpec(k, DELTA_TOT)^2 in (kpc/h)^3."""
+    base = os.path.basename(os.path.abspath(REAL_IC))
+    path = os.path.join(_sim_dir(), "ICS", f"inputspec_{base}.txt")
+    if not os.path.exists(path):
+        pytest.skip(f"no inputspec file at {path}")
+    k, p = np.loadtxt(path, unpack=True)
+    return k, p / 1e9                       # (kpc/h)^3 -> (Mpc/h)^3
+
+
+@pytest.mark.slow
+def test_real_ic_velocity_power_matches_the_input_spectrum():
+    """THE cosmology guard: -div(v)/(aHf) must reproduce the linear P(k) GenIC was given.
+
+    In linear theory v(k) = i (k/k^2) a H f delta_1(k), so -div(v)/(aHf) IS delta_1 and
+    its power spectrum must equal the input spectrum. This validates the WHOLE units
+    chain at once — the UsePeculiarVelocity dispatch, the sqrt(a) convention, the h
+    factor in hubble_z, and the growth rate. Any of them wrong and the amplitude moves:
+    a stray sqrt(a) -> ratio 0.01; a missing 1/h -> ~0.55. Measured: 1.002.
+
+    Slow: streams the full particle block once (~5 min on the 512^3 IC).
+    """
+    nmesh = 128
+    vf = load_ic_velocity_mesh(REAL_IC, ptype="dm", nmesh=nmesh, field="velocity")
+    om, ol, h = vf.meta["Omega0"], vf.meta["OmegaLambda"], vf.meta["hubble"]
+    if om is None or h is None:
+        pytest.skip("IC Header lacks the cosmology needed to predict the amplitude")
+    z = vf.redshift
+    a = 1.0 / (1.0 + z)
+    aHf = a * units.hubble_z(z, om, ol, h) / h * units.growth_rate(z, om, ol)
+
+    box = vf.box
+    kf = 2 * np.pi / box
+    kx = np.fft.fftfreq(nmesh, d=1.0 / nmesh)[:, None, None] * kf
+    ky = np.fft.fftfreq(nmesh, d=1.0 / nmesh)[None, :, None] * kf
+    kz = np.fft.rfftfreq(nmesh, d=1.0 / nmesh)[None, None, :] * kf
+    v = vf.v.astype(np.float32)
+    div = np.fft.irfftn(
+        1j * (kx * np.fft.rfftn(v[0]) + ky * np.fft.rfftn(v[1]) + kz * np.fft.rfftn(v[2])),
+        s=(nmesh, nmesh, nmesh),
+        axes=(0, 1, 2),
+    )
+    theta = -div / aHf                      # = delta_1 in linear theory
+
+    k, P = _binned_pk(theta, nmesh, box)
+    kin, pin = _input_pk()
+    sel = (k > 2 * kf) & (k < 0.8)          # above the fundamental, below the CIC window
+    ratio = float(np.mean(P[sel] / np.interp(k[sel], kin, pin)))
+    assert ratio == pytest.approx(1.0, abs=0.10), (
+        f"P[-div(v)/aHf] / P_input = {ratio:.3f}, expected ~1.0. The IC velocity "
+        f"normalisation is off — check the UsePeculiarVelocity dispatch (a stray "
+        f"sqrt(a) gives ~0.01) and the h factor in hubble_z (a missing 1/h gives ~0.55)."
+    )
+
+
+@pytest.mark.slow
+def test_real_ic_dm_density_power_is_cdm_not_total_matter():
+    """delta_1(ptype="dm") is the CDM field: ~9% MORE power than total matter.
+
+    This is species physics, not a bug — but it is a 4.6% amplitude offset that would
+    propagate into b_F if a consumer normalised this field against a total-matter P(k).
+    We pin it against the sim's OWN CLASS transfer functions so that (a) the docs cannot
+    drift from the data, and (b) an actual amplitude regression in the icdensity route
+    still fails the test.
+
+    Slow: streams the full particle block once.
+    """
+    nmesh = 128
+    df = load_ic_density(REAL_IC, ptype="dm", nmesh=nmesh, field="icdensity")
+    k, P = _binned_pk(df.delta, nmesh, df.box)
+    kin, pin = _input_pk()
+
+    tpath = os.path.join(_sim_dir(), "camb_linear", "ics_transfer_99.dat")
+    if not os.path.exists(tpath):
+        pytest.skip(f"no transfer file at {tpath}")
+    t = np.loadtxt(tpath)
+    if t.shape[1] < 6:
+        pytest.skip("unexpected transfer-file layout")
+    # no massive neutrinos in PRIYA => 16 cols: k, d_g, d_b, d_cdm, d_ur, d_tot, ...
+    tk, d_b, d_cdm = t[:, 0], t[:, 2], t[:, 3]
+    om, ob = df.meta["Omega0"], df.meta.get("OmegaBaryon")
+    if om is None or ob is None:
+        pytest.skip("IC Header lacks Omega0/OmegaBaryon")
+    fb = ob / om
+    d_m = (1.0 - fb) * d_cdm + fb * d_b          # GenIC's DELTA_TOT is matter-only
+    kf = 2 * np.pi / df.box
+    sel = (k > 2 * kf) & (k < 1.0)
+    measured = float(np.mean(P[sel] / np.interp(k[sel], kin, pin)))
+    predicted = float(np.mean(np.interp(k[sel], tk, (d_cdm / d_m) ** 2)))
+
+    assert measured == pytest.approx(predicted, rel=0.06), (
+        f"P(delta_1|dm) / P_input = {measured:.3f}, but the sim's own CLASS transfer "
+        f"functions predict (T_cdm/T_matter)^2 = {predicted:.3f}. Either the icdensity "
+        f"amplitude has regressed, or the species assumption in the docs is wrong."
+    )
+    assert measured > 1.02, "expected the CDM field to carry MORE power than total matter"

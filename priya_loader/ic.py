@@ -39,8 +39,35 @@ What this field IS
   window; deconvolve for an unbiased finite-k cross-spectrum (see
   :mod:`priya_loader.mesh`). (The ``"icdensity"`` route's window is a *sinc*
   top-hat, not ``sinc^2`` — see above.)
-* **``ptype="dm"`` is a total-matter proxy** — exact at ``k -> 0``; baryons
-  differ at the percent level on quasilinear scales at z=99.
+* **``ptype="dm"`` is the CDM field, NOT the total-matter field.** This matters for
+  the bias amplitude, so read it before you normalise anything. Each species is
+  drawn from its own CLASS transfer function (``DifferentTransferFunctions=1`` in
+  PRIYA), and at z=99 the baryons still lag the CDM (``d_b/d_cdm ~ 0.65-0.71`` over
+  ``0.1 < k < 2`` h/Mpc). So::
+
+      P(delta_1 | ptype="dm") / P_total-matter = (T_cdm / T_matter)^2 ~ 1.09
+
+  i.e. the ``ptype="dm"`` field is **~4.6% high in amplitude** (~9-11% in power)
+  relative to total matter — **flat in k**, and it does **NOT** vanish as
+  ``k -> 0`` (it is largest there: 1.116 at k=0.1). Measured on the staged 512^3 IC
+  against ``ICS/inputspec_*.txt`` (the linear P(k) GenIC was handed): measured
+  ratio **1.105**, predicted from the sim's own ``camb_linear/ics_transfer_99.dat``
+  **1.093** — agreement to 1%, so this is species physics, not a loader artefact.
+
+  Consequences:
+    - **Consistency is what saves you.** ``b_F = P_{F,delta} / P_{delta,delta}`` is a
+      ratio, so measuring both from *this same* field is fine. The error creeps in
+      when you mix — e.g. taking ``P_{delta,delta}`` from a CAMB/CLASS **total-matter**
+      spectrum while the cross term uses this CDM field. That mis-normalises ``b_F``
+      by ~4.6%.
+    - For a genuine total-matter ``delta_1``, combine the species:
+      ``delta_m = (1-f_b) * delta_cdm + f_b * delta_gas`` with ``f_b = Omega_b/Omega_0``
+      (0.154 for this sim). NOTE: the gas ``field="icdensity"`` route is currently
+      unusable (gas is a *glass*, not a Lagrangian grid — see that route's caveats),
+      so this needs the gas ``"cic"`` route or a paint-at-``Position`` of gas ``ICDensity``.
+    - The velocity field does **not** carry this offset: ``-div(v)/(aHf)`` reproduces
+      the *total-matter* input spectrum to **0.2%** (verified in
+      ``tests/test_real_ic.py``).
 
 Co-registration with a tau cube (read this before cross-correlating)
 --------------------------------------------------------------------
@@ -239,6 +266,7 @@ def load_ic_particles(
         upv = int(_attr(attrs, "UsePeculiarVelocity")) if "UsePeculiarVelocity" in keys else None
         omega0 = _attr(attrs, "Omega0") if "Omega0" in keys else None
         omega_lambda = _attr(attrs, "OmegaLambda") if "OmegaLambda" in keys else None
+        omega_b = _attr(attrs, "OmegaBaryon") if "OmegaBaryon" in keys else None
         header = {
             "box_kpc_h": box_kpc_h,
             "box_mpc_h": units.kpc_h_to_mpc_h(box_kpc_h),
@@ -249,6 +277,7 @@ def load_ic_particles(
             "velocity_units": None,       # filled in below, once we know what was loaded
             "Omega0": omega0,
             "OmegaLambda": omega_lambda,
+            "OmegaBaryon": omega_b,   # f_b = OmegaBaryon/Omega0: needed to build total-matter delta_1
         }
         # All requested columns describe the SAME particles, so they must be the same
         # length. On a mid-transfer IC (the normal state of this archive) they need
@@ -449,6 +478,7 @@ def load_ic_density(
         hubble = _attr(attrs, "HubbleParam") if "HubbleParam" in keys else None
         omega0 = _attr(attrs, "Omega0") if "Omega0" in keys else None
         omega_lambda = _attr(attrs, "OmegaLambda") if "OmegaLambda" in keys else None
+        omega_b = _attr(attrs, "OmegaBaryon") if "OmegaBaryon" in keys else None
         time = _attr(attrs, "Time") if "Time" in keys else None
         if "Redshift" in keys:
             redshift = _attr(attrs, "Redshift")
@@ -495,6 +525,7 @@ def load_ic_density(
             # to rescale this z_init field to the flux redshift (see docstring):
             "Omega0": omega0,
             "OmegaLambda": omega_lambda,
+            "OmegaBaryon": omega_b,   # f_b = OmegaBaryon/Omega0: needed to build total-matter delta_1
             "Time": time,
             "los_is_velocity_axis": False,           # real space (cf. tau)
         },
@@ -593,6 +624,7 @@ def load_ic_velocity_mesh(
         hubble = _attr(attrs, "HubbleParam") if "HubbleParam" in keys else None
         omega0 = _attr(attrs, "Omega0") if "Omega0" in keys else None
         omega_lambda = _attr(attrs, "OmegaLambda") if "OmegaLambda" in keys else None
+        omega_b = _attr(attrs, "OmegaBaryon") if "OmegaBaryon" in keys else None
         time = _attr(attrs, "Time") if "Time" in keys else None
         if "Redshift" in keys:
             redshift = _attr(attrs, "Redshift")
@@ -672,6 +704,7 @@ def load_ic_velocity_mesh(
             "hubble": hubble,
             "Omega0": omega0,
             "OmegaLambda": omega_lambda,
+            "OmegaBaryon": omega_b,   # f_b = OmegaBaryon/Omega0: needed to build total-matter delta_1
             "Time": time,
             "los_is_velocity_axis": False,
         },

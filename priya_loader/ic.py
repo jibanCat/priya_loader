@@ -167,7 +167,8 @@ def load_ic_particles(
     (data, header) : (dict[str, np.ndarray], dict)
         ``data[col]`` arrays; ``header`` has ``box_mpc_h``, ``box_kpc_h``,
         ``hubble``, ``redshift``, ``scale_factor``, ``use_peculiar_velocity``,
-        ``velocity_units``.
+        ``velocity_units``, ``Omega0``, ``OmegaLambda`` (``None`` if the IC
+        Header lacks either attr).
     """
     if ptype not in PTYPE:
         raise ValueError(f"ptype must be one of {sorted(PTYPE)}; got {ptype!r}")
@@ -203,6 +204,8 @@ def load_ic_particles(
         if time is None and np.isfinite(redshift):
             time = units.redshift_to_scale_factor(redshift)
         upv = int(_attr(attrs, "UsePeculiarVelocity")) if "UsePeculiarVelocity" in keys else None
+        omega0 = _attr(attrs, "Omega0") if "Omega0" in keys else None
+        omega_lambda = _attr(attrs, "OmegaLambda") if "OmegaLambda" in keys else None
         header = {
             "box_kpc_h": box_kpc_h,
             "box_mpc_h": units.kpc_h_to_mpc_h(box_kpc_h),
@@ -213,6 +216,8 @@ def load_ic_particles(
             "velocity_units": (
                 "km/s (peculiar)" if velocity == "peculiar_kms" else "raw (as stored)"
             ),
+            "Omega0": omega0,
+            "OmegaLambda": omega_lambda,
         }
         for col in columns:
             name = f"{t}/{col}"

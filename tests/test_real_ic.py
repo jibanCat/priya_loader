@@ -251,19 +251,24 @@ def test_real_ic_velocity_matches_linear_theory(real_ic_particles_posvel):
     from the CLASS velocity transfer function rather than being exactly f*a*H*Psi;
     hence the generous tolerance. A units error is a factor of 10 — nowhere near it.
 
-    NOTE: load_ic_particles' header does not carry Omega0/OmegaLambda (unlike
-    load_ic_density's meta dict), so header.get("Omega0") is always None here and
-    the PRIYA-ish fallback 0.288 is what actually gets used, for every sim. That's
-    fine given the 20% tolerance (the sqrt(a) bug this test targets is a factor of
-    ~10, not ~1.2), but it means this test does NOT verify against each sim's true
-    Omega_m — only the fallback constant. See task-4-report.md for detail.
+    Uses the real sim's Omega0/OmegaLambda from the IC Header (load_ic_particles'
+    header now carries them, mirroring load_ic_density's meta dict). PRIYA varies
+    Omega_m across sims (~0.25-0.34), and the prediction scales as sqrt(Omega_m)
+    through H(z), so a hardcoded constant would be off by up to ~17% against this
+    test's 20% tolerance — nearly insensitive to the very bug it targets. If the
+    Header lacks Omega0 we skip rather than substitute a wrong cosmology.
     """
     pos, vel, header, ngrid = real_ic_particles_posvel
     box_kpc_h = header["box_kpc_h"]
     a = header["scale_factor"]
     z = header["redshift"]
-    om = header["Omega0"] if header.get("Omega0") else 0.288      # PRIYA-ish fallback
-    ol = 1.0 - om
+    om = header.get("Omega0")
+    ol = header.get("OmegaLambda")
+    if not om or ol is None:
+        pytest.skip(
+            "IC Header has no Omega0/OmegaLambda; cannot verify against true "
+            "cosmology (no fallback — see docstring)"
+        )
 
     # Displacement Psi = Position - q, with q the Lagrangian site decoded from ID
     # (same convention as ic._load_icdensity_grid: lag = (ID-1) % npart).

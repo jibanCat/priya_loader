@@ -261,6 +261,11 @@ def test_load_ic_particles_returns_raw_columns(tmp_path):
     assert 0.0 <= data["Position"].min() and data["Position"].max() < 120000.0  # kpc/h
     assert header["box_mpc_h"] == pytest.approx(120.0)
     assert header["redshift"] == pytest.approx(99.0)
+    # Omega0/OmegaLambda must be exposed (mirrors load_ic_density's meta dict) so
+    # consumers (e.g. the real-IC linear-theory velocity test) can use the sim's
+    # true cosmology instead of a hardcoded fallback.
+    assert header["Omega0"] == pytest.approx(0.3)
+    assert header["OmegaLambda"] == pytest.approx(0.7)
 
 
 def test_load_ic_particles_subsample(tmp_path):

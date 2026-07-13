@@ -330,3 +330,66 @@ def test_bad_velocity_kwarg_raises(tmp_path):
     p = _make_ic_bigfile(tmp_path / "ic", ngrid=4)
     with pytest.raises(ValueError, match="velocity must be"):
         ic.load_ic_particles(p, ptype="dm", velocity="nonsense")
+
+
+# --- velocity mesh (CIC momentum / mean-velocity field) ------------------------
+def test_velocity_mesh_uniform_velocity_is_recovered(tmp_path):
+    """Every particle has the same v => every occupied cell must show exactly that v.
+    This is the test that pins the momentum/count normalisation p/n."""
+    v = np.array([10.0, -20.0, 5.0], dtype="f4")
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=8, time=0.01, velocities=v,
+                         use_peculiar_velocity=1)
+    vf = ic.load_ic_velocity_mesh(p, ptype="dm", nmesh=8, field="velocity")
+    assert vf.v.shape == (3, 8, 8, 8)
+    assert vf.meta["empty_cells"] == 0
+    for a in range(3):
+        np.testing.assert_allclose(vf.v[a], v[a], rtol=1e-5)
+
+
+def test_velocity_mesh_momentum_conserves_total(tmp_path):
+    """CIC weights sum to 1 per particle => sum(momentum mesh) == sum(v) over particles."""
+    rng = np.random.RandomState(3)
+    n = 8 ** 3
+    v = (rng.randn(n, 3) * 30.0).astype("f4")
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=8, time=0.01, velocities=v,
+                         use_peculiar_velocity=1)
+    vf = ic.load_ic_velocity_mesh(p, ptype="dm", nmesh=8, field="momentum")
+    assert vf.field == "momentum"
+    for a in range(3):
+        assert vf.v[a].sum() == pytest.approx(v[:, a].sum(), rel=1e-4)
+
+
+def test_velocity_mesh_empty_cells_are_zero_and_reported(tmp_path):
+    """Far more cells than particles => empty cells are 0 and counted, with a warning."""
+    v = np.array([10.0, 0.0, 0.0], dtype="f4")
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=2, time=0.01, velocities=v,
+                         use_peculiar_velocity=1)          # 8 particles
+    with pytest.warns(UserWarning, match="empty"):
+        vf = ic.load_ic_velocity_mesh(p, ptype="dm", nmesh=16, field="velocity")
+    assert vf.meta["empty_cells"] > 0
+    assert np.all(np.isfinite(vf.v))            # 0/0 must never leak a NaN
+    # every empty cell is exactly zero in every component
+    empty_mask = np.all(vf.v == 0.0, axis=0)
+    assert empty_mask.sum() >= vf.meta["empty_cells"]
+
+
+def test_velocity_mesh_uses_peculiar_units(tmp_path):
+    """The mesh must go through the same flag dispatch as the particles."""
+    v = np.array([10.0, 0.0, 0.0], dtype="f4")
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=8, time=0.01, velocities=v,
+                         use_peculiar_velocity=0)           # stored = v/sqrt(a)
+    vf = ic.load_ic_velocity_mesh(p, ptype="dm", nmesh=8, field="velocity")
+    np.testing.assert_allclose(vf.v[0], 10.0 * 0.1, rtol=1e-4)   # x sqrt(0.01)
+    assert vf.units == "km/s (peculiar)"
+
+
+def test_velocity_mesh_bad_field_raises(tmp_path):
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=4, velocities=np.zeros(3))
+    with pytest.raises(ValueError, match="field must be"):
+        ic.load_ic_velocity_mesh(p, ptype="dm", nmesh=4, field="nonsense")
+
+
+def test_velocity_mesh_missing_block_raises(tmp_path):
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=4)           # no Velocity written
+    with pytest.raises(ValueError, match="Velocity"):
+        ic.load_ic_velocity_mesh(p, ptype="dm", nmesh=4)

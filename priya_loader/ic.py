@@ -110,6 +110,23 @@ class ICField:
     meta: Dict[str, Any] = field(default_factory=dict, repr=False)
 
 
+@dataclass
+class ICVelocityField:
+    """IC velocity (or momentum) field on a mesh, in peculiar km/s."""
+
+    v: np.ndarray                # (3, nmesh, nmesh, nmesh) float32
+    nmesh: int
+    box: float                   # Mpc/h
+    ptype: str                   # "gas" | "dm"
+    redshift: float              # IC redshift (z_init, ~99)
+    field: str                   # "velocity" (p/n) | "momentum" (p)
+    npart: int
+    units: str = "km/s (peculiar)"
+    axes: tuple = ("x", "y", "z")
+    space: str = "real"
+    meta: Dict[str, Any] = field(default_factory=dict, repr=False)
+
+
 def load_ic_particles(
     ic_dir: StrPath,
     ptype: str = "dm",
@@ -418,5 +435,141 @@ def load_ic_density(
             "OmegaLambda": omega_lambda,
             "Time": time,
             "los_is_velocity_axis": False,           # real space (cf. tau)
+        },
+    )
+
+
+def load_ic_velocity_mesh(
+    ic_dir: StrPath,
+    ptype: str = "dm",
+    nmesh: int = 256,
+    field: str = "velocity",
+    chunk_size: int = 8_000_000,
+) -> ICVelocityField:
+    """CIC-paint the IC particle velocities onto an ``nmesh^3`` mesh.
+
+    Streams ``Position`` + ``Velocity`` in chunks and accumulates, per component
+    ``a``, the CIC momentum and the CIC counts::
+
+        p_a(x) = sum_i v_{i,a} W(x - x_i)      n(x) = sum_i W(x - x_i)
+
+    (Particles are equal-mass, so the mass factors out of ``p/n``.)
+
+    Parameters
+    ----------
+    ic_dir, ptype, nmesh, chunk_size : as :func:`load_ic_density`.
+    field : {"velocity", "momentum"}
+        ``"velocity"`` (default): ``p / n`` — the mass-weighted mean velocity in
+        each cell, in peculiar km/s. Cells with no particles are set to **0** and
+        counted in ``meta["empty_cells"]`` (a warning is raised if any); at
+        z ~ 99 with ``nmesh <= ngrid`` there should be none, so a nonzero count
+        means your mesh is finer than the particle grid.
+        ``"momentum"``: the raw ``p`` (mass-weighted, linear in ``v``) — the field
+        to Fourier transform if you want a momentum/velocity-divergence spectrum
+        without the ``p/n`` ratio's noise in low-density cells.
+
+    Velocities are peculiar km/s: the IC Header's ``UsePeculiarVelocity`` flag is
+    read and applied (see :func:`priya_loader.units.ic_velocity_to_peculiar_kms`).
+
+    Returns
+    -------
+    ICVelocityField
+        ``v`` has shape ``(3, nmesh, nmesh, nmesh)``, indexed ``[component][x,y,z]``
+        on the same grid/origin as :class:`ICField` (so it co-registers with the
+        density mesh and, via the HANDOFF recipe, with tau).
+    """
+    if ptype not in PTYPE:
+        raise ValueError(f"ptype must be one of {sorted(PTYPE)}; got {ptype!r}")
+    if field not in ("velocity", "momentum"):
+        raise ValueError(f"field must be 'velocity' or 'momentum'; got {field!r}")
+    if nmesh < 1 or chunk_size < 1:
+        raise ValueError(f"nmesh and chunk_size must be >= 1 (got {nmesh}, {chunk_size})")
+    try:
+        import bigfile
+    except ImportError as e:  # pragma: no cover
+        raise ImportError("reading ICs needs bigfile: pip install priya_loader[ic]") from e
+
+    t = PTYPE[ptype]
+    try:
+        bf = bigfile.File(str(ic_dir))
+    except Exception as e:
+        raise ValueError(f"{ic_dir}: cannot open IC bigfile ({e!r})") from e
+    with bf:
+        try:
+            attrs = bf["Header"].attrs
+            keys = set(attrs.keys())
+        except Exception as e:
+            raise ValueError(f"{ic_dir}: cannot read IC Header ({e!r}); skeleton/corrupt?") from e
+        if "BoxSize" not in keys:
+            raise ValueError(f"{ic_dir}: Header has no BoxSize")
+        box_kpc_h = _attr(attrs, "BoxSize")
+        hubble = _attr(attrs, "HubbleParam") if "HubbleParam" in keys else None
+        omega0 = _attr(attrs, "Omega0") if "Omega0" in keys else None
+        omega_lambda = _attr(attrs, "OmegaLambda") if "OmegaLambda" in keys else None
+        time = _attr(attrs, "Time") if "Time" in keys else None
+        if "Redshift" in keys:
+            redshift = _attr(attrs, "Redshift")
+        elif time is not None:
+            redshift = units.scale_factor_to_redshift(time)
+        else:
+            redshift = float("nan")
+            warnings.warn(f"{ic_dir}: Header has no Redshift/Time; redshift set to NaN")
+        if time is None and np.isfinite(redshift):
+            time = units.redshift_to_scale_factor(redshift)
+        upv = int(_attr(attrs, "UsePeculiarVelocity")) if "UsePeculiarVelocity" in keys else None
+
+        for blk in (f"{t}/Position", f"{t}/Velocity"):
+            if blk not in bf.blocks:
+                raise ValueError(f"{ic_dir}: no '{blk}' block (ptype={ptype!r})")
+        pblk, vblk = bf[f"{t}/Position"], bf[f"{t}/Velocity"]
+        npart = int(pblk.size)
+        if int(vblk.size) != npart:
+            raise ValueError(
+                f"{ic_dir}: Position ({npart}) and Velocity ({vblk.size}) sizes differ"
+            )
+
+        mom = np.zeros((3, nmesh, nmesh, nmesh), dtype=np.float64)
+        cnt = np.zeros((nmesh, nmesh, nmesh), dtype=np.float64)
+        for start in range(0, npart, chunk_size):
+            stop = min(start + chunk_size, npart)
+            pos = pblk[start:stop]                                   # (chunk, 3) kpc/h
+            vel = units.ic_velocity_to_peculiar_kms(vblk[start:stop], time, upv)
+            mesh.cic_paint(pos, nmesh, boxsize=box_kpc_h, out=cnt)   # counts
+            for a in range(3):
+                mesh.cic_paint(pos, nmesh, boxsize=box_kpc_h, out=mom[a],
+                               weights=vel[:, a])                    # momentum
+
+    empty = int((cnt == 0).sum())
+    if field == "velocity":
+        safe = np.where(cnt > 0, cnt, 1.0)          # 0/0 -> 0, never NaN
+        out = mom / safe
+        if empty:
+            warnings.warn(
+                f"{empty} of {nmesh ** 3} cells are empty (no particles) and were set "
+                f"to v=0; nmesh={nmesh} is finer than the particle grid"
+            )
+    else:
+        out = mom
+
+    return ICVelocityField(
+        v=out.astype(np.float32),
+        nmesh=nmesh,
+        box=units.kpc_h_to_mpc_h(box_kpc_h),
+        ptype=ptype,
+        redshift=redshift,
+        field=field,
+        npart=npart,
+        units="km/s (peculiar)",
+        space="real",
+        meta={
+            "ic_dir": str(ic_dir),
+            "cell_kpc_h": box_kpc_h / nmesh,
+            "empty_cells": empty,
+            "use_peculiar_velocity": upv,
+            "hubble": hubble,
+            "Omega0": omega0,
+            "OmegaLambda": omega_lambda,
+            "Time": time,
+            "los_is_velocity_axis": False,
         },
     )

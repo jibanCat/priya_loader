@@ -397,10 +397,11 @@ def test_real_ic_velocity_power_matches_the_input_spectrum():
 
     Slow: streams the full particle block once (~5 min on the 512^3 IC).
     """
+    _skip_if_heavy_load()   # a 3072^3 target is ~1 TB of I/O — never on a shared login node
     nmesh = 128
     vf = load_ic_velocity_mesh(REAL_IC, ptype="dm", nmesh=nmesh, field="velocity")
     om, ol, h = vf.meta["Omega0"], vf.meta["OmegaLambda"], vf.meta["hubble"]
-    if om is None or h is None:
+    if om is None or ol is None or h is None:
         pytest.skip("IC Header lacks the cosmology needed to predict the amplitude")
     z = vf.redshift
     a = 1.0 / (1.0 + z)
@@ -442,6 +443,7 @@ def test_real_ic_dm_density_power_is_cdm_not_total_matter():
 
     Slow: streams the full particle block once.
     """
+    _skip_if_heavy_load()   # a 3072^3 target is ~1 TB of I/O — never on a shared login node
     nmesh = 128
     df = load_ic_density(REAL_IC, ptype="dm", nmesh=nmesh, field="icdensity")
     k, P = _binned_pk(df.delta, nmesh, df.box)

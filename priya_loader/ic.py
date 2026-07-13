@@ -234,6 +234,10 @@ def load_ic_particles(
         raise ValueError(f"ptype must be one of {sorted(PTYPE)}; got {ptype!r}")
     if subsample < 1:
         raise ValueError(f"subsample must be >= 1; got {subsample}")
+    if chunk_size < 1:
+        # chunk_size <= 0 makes range(0, n, chunk_size) raise deep in the read loop
+        # (or, for a huge value, defeats the streaming this function exists for).
+        raise ValueError(f"chunk_size must be >= 1; got {chunk_size}")
     if velocity not in ("peculiar_kms", "raw"):
         raise ValueError(f"velocity must be 'peculiar_kms' or 'raw'; got {velocity!r}")
     try:
@@ -294,6 +298,12 @@ def load_ic_particles(
                 f"{ic_dir}: requested columns have different lengths {sizes} — they index the "
                 f"same particles, so this IC is partially written (skeleton/mid-transfer)"
             )
+        # ...and equal-but-wrong is still wrong: an empty or half-written block must not
+        # come back as a valid-looking particle set. (The sibling loaders raise here; this
+        # one used to return an empty array stamped "km/s (peculiar)" -> a NaN v_rms.)
+        expected = _expected_npart(attrs, keys, t)
+        for col, n_col in sizes.items():
+            _check_block_complete(ic_dir, f"{t}/{col}", n_col, expected)
 
         for col in columns:
             name = f"{t}/{col}"
@@ -400,6 +410,35 @@ def _load_icdensity_grid(bf, t, nmesh, chunk_size):
         )
     cnt[cnt == 0] = 1.0
     return (ssum / cnt).reshape(nmesh, nmesh, nmesh).astype(np.float32), npart
+
+
+def _expected_npart(attrs, keys, t):
+    """Particles this type SHOULD have, from the Header's ``TotNumPart`` (i8[6]).
+
+    Lets us tell a *complete* block from a half-transferred one: a partially written
+    Position block loads as a perfectly valid-looking particle set, and CIC-painting
+    it over the full box silently gives a density field with the wrong mean and a
+    hole where the untransferred Lagrangian region is. Returns None if the Header
+    does not carry the count (then we cannot check).
+    """
+    if "TotNumPart" not in keys:
+        return None
+    tot = np.asarray(attrs["TotNumPart"]).ravel()
+    return int(tot[t]) if tot.size > t else None
+
+
+def _check_block_complete(ic_dir, name, n, expected):
+    """Raise unless block ``name`` has all ``expected`` particles (skeleton/mid-transfer)."""
+    if n == 0:
+        raise ValueError(
+            f"{ic_dir}: '{name}' is empty (0 particles); skeleton/mid-transfer IC?"
+        )
+    if expected is not None and n != expected:
+        raise ValueError(
+            f"{ic_dir}: '{name}' has {n} of {expected} particles (Header TotNumPart) — "
+            f"the block is partially written (mid-transfer IC), so any field built from "
+            f"it would be silently wrong"
+        )
 
 
 def _attr(attrs, key):
@@ -646,14 +685,10 @@ def load_ic_velocity_mesh(
             raise ValueError(
                 f"{ic_dir}: Position ({npart}) and Velocity ({vblk.size}) sizes differ"
             )
-        if npart == 0:
-            # An empty-skeleton IC (the normal mid-transfer state of this archive).
-            # Without this, the chunk loop below never runs, so we would return an
-            # all-zero cube stamped "km/s (peculiar)" — a unit we never applied, on
-            # data that does not exist. load_ic_density raises here too.
-            raise ValueError(
-                f"{ic_dir}: '{t}/Position' is empty (0 particles); skeleton/mid-transfer IC?"
-            )
+        # An empty or half-written block must not become an all-zero cube stamped
+        # "km/s (peculiar)" — a unit we never applied, on data that does not exist.
+        _expected = _expected_npart(attrs, keys, t)
+        _check_block_complete(ic_dir, f"{t}/Position", npart, _expected)
         # Validate the velocity convention BEFORE the loop: the conversion lives
         # inside it, so a flag-less IC would otherwise only raise once the first
         # chunk is read — and never at all if there were no chunks.

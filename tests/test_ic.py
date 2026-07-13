@@ -557,6 +557,49 @@ def test_velocity_mesh_raises_on_missing_velocity_flag(tmp_path):
         ic.load_ic_velocity_mesh(p, ptype="dm", nmesh=4)
 
 
+def _bare_ic_with_totnumpart(path, npos, totnumpart):
+    """An IC whose Header advertises `totnumpart` DM particles but whose block has `npos`."""
+    with bigfile.File(str(path), create=True) as bf:
+        bf.create_from_array("1/Position", np.zeros((npos, 3), "f8"))
+        with bf.create("Header") as h:
+            h.attrs["BoxSize"] = 120000.0
+            h.attrs["Time"] = 0.01
+            h.attrs["Redshift"] = 99.0
+            h.attrs["UsePeculiarVelocity"] = np.array([1], dtype="i4")
+            h.attrs["TotNumPart"] = np.array([0, totnumpart, 0, 0, 0, 0], dtype="i8")
+    return path
+
+
+def test_load_ic_particles_raises_on_empty_skeleton(tmp_path):
+    """A skeleton IC must RAISE here too, not return empty arrays labelled km/s.
+
+    The sibling loaders already raised; this one returned Position(0,3)/Velocity(0,3)
+    with velocity_units='km/s (peculiar)', so a consumer looping over a partially
+    transferred archive silently got empty samples and a NaN v_rms instead of an error
+    naming the unstaged simulation.
+    """
+    p = _bare_ic(tmp_path / "skeleton", 0, 0)
+    with pytest.raises(ValueError, match="empty|skeleton"):
+        ic.load_ic_particles(p, ptype="dm", columns=("Position", "Velocity"))
+
+
+def test_load_ic_particles_raises_on_half_written_block(tmp_path):
+    """A block with FEWER particles than the Header advertises must raise.
+
+    Equal-length columns are not enough: a half-transferred Position block loads as a
+    perfectly valid-looking particle set, and CIC-painting it over the full box gives a
+    density field with the wrong mean and a hole where the untransferred Lagrangian
+    region is -- a wrong delta_1 and hence a wrong b_F, with no diagnostic.
+    """
+    p = _bare_ic_with_totnumpart(tmp_path / "half", npos=60, totnumpart=100)
+    with pytest.raises(ValueError, match="partially written|60 of 100"):
+        ic.load_ic_particles(p, ptype="dm", columns=("Position",))
+    # the complete case still loads
+    q = _bare_ic_with_totnumpart(tmp_path / "whole", npos=100, totnumpart=100)
+    data, _ = ic.load_ic_particles(q, ptype="dm", columns=("Position",))
+    assert data["Position"].shape == (100, 3)
+
+
 def test_load_ic_particles_rejects_ragged_columns(tmp_path):
     """Position(100) + Velocity(60) must raise, not silently row-misalign.
 

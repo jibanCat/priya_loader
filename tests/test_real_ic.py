@@ -264,10 +264,17 @@ def test_real_ic_velocity_matches_linear_theory(real_ic_particles_posvel):
     z = header["redshift"]
     om = header.get("Omega0")
     ol = header.get("OmegaLambda")
+    hubble = header.get("hubble")
     if not om or ol is None:
         pytest.skip(
             "IC Header has no Omega0/OmegaLambda; cannot verify against true "
             "cosmology (no fallback — see docstring)"
+        )
+    if not hubble:
+        pytest.skip(
+            "IC Header has no hubble (h); cannot convert sigma_disp from "
+            "kpc/h to physical Mpc for the hubble_z(km/s/Mpc) prediction "
+            "(no fallback — see docstring)"
         )
 
     # Displacement Psi = Position - q, with q the Lagrangian site decoded from ID
@@ -281,10 +288,14 @@ def test_real_ic_velocity_matches_linear_theory(real_ic_particles_posvel):
     d -= box_kpc_h * np.round(d / box_kpc_h)            # periodic minimum image
     sigma_disp = float(np.sqrt((d ** 2).sum(axis=1).mean()))      # kpc/h, 3D rms
 
-    # a*H(a)*f * Psi, with H in km/s/(Mpc/h) and Psi in kpc/h -> km/s
-    H = units.hubble_z(z, om, ol, header["hubble"])               # km/s/(Mpc/h)
+    # a*H(a)*f * Psi. hubble_z returns H in km/s/Mpc (physical Mpc; h is already
+    # baked in via the 100.0*hubble prefactor — see units.hubble_z docstring).
+    # sigma_disp is comoving kpc/h, so convert to comoving Mpc (h divided out,
+    # matching hubble_z's physical-Mpc units) via /1000.0/hubble — same pattern
+    # as units.velfac and tau.dv_kms.
+    H = units.hubble_z(z, om, ol, hubble)                         # km/s/Mpc
     f = units.growth_rate(z, om, ol)
-    predicted = a * H * f * (sigma_disp / 1000.0)                 # kpc/h -> Mpc/h
+    predicted = a * H * f * (sigma_disp / 1000.0 / hubble)        # kpc/h -> comoving Mpc
     measured = float(np.sqrt((vel ** 2).sum(axis=1).mean()))
 
     assert measured == pytest.approx(predicted, rel=0.20), (

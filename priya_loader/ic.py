@@ -82,7 +82,8 @@ from __future__ import annotations
 
 import os
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from typing import Any, Dict, Union
 
 import numpy as np
@@ -107,12 +108,23 @@ class ICField:
     npart: int                   # particles painted
     axes: tuple = ("x", "y", "z")
     space: str = "real"          # real space (cf. TauGrid.space == "redshift")
-    meta: Dict[str, Any] = field(default_factory=dict, repr=False)
+    meta: Dict[str, Any] = dc_field(default_factory=dict, repr=False)
 
 
 @dataclass
 class ICVelocityField:
-    """IC velocity (or momentum) field on a mesh, in peculiar km/s."""
+    """IC velocity (or momentum) field on a mesh, in peculiar km/s.
+
+    Note: the public attributes ``.field`` and ``.units`` intentionally shadow
+    the module-level names ``dataclasses.field`` and ``priya_loader.units``
+    inside this class body (they are already documented/used by that name in
+    the notebook and README, so we don't rename them). That's why the ``field``
+    import above is aliased to ``dc_field`` for the ``meta`` default below:
+    unaliased, giving ``field`` a default value here (rather than leaving it
+    annotation-only) would silently rebind the class-body name ``field`` to a
+    plain string, and ``field(default_factory=dict, ...)`` would then try to
+    call a ``str`` and raise a confusing ``TypeError``.
+    """
 
     v: np.ndarray                # (3, nmesh, nmesh, nmesh) float32
     nmesh: int
@@ -124,7 +136,7 @@ class ICVelocityField:
     units: str = "km/s (peculiar)"
     axes: tuple = ("x", "y", "z")
     space: str = "real"
-    meta: Dict[str, Any] = field(default_factory=dict, repr=False)
+    meta: Dict[str, Any] = dc_field(default_factory=dict, repr=False)
 
 
 def load_ic_particles(
@@ -168,7 +180,12 @@ def load_ic_particles(
         ``data[col]`` arrays; ``header`` has ``box_mpc_h``, ``box_kpc_h``,
         ``hubble``, ``redshift``, ``scale_factor``, ``use_peculiar_velocity``,
         ``velocity_units``, ``Omega0``, ``OmegaLambda`` (``None`` if the IC
-        Header lacks either attr).
+        Header lacks either attr). ``velocity_units`` is ``"km/s (peculiar)"``
+        when ``"Velocity"`` was requested and converted, ``"raw (as stored)"``
+        when ``"Velocity"`` was requested with ``velocity="raw"``, and ``None``
+        whenever no ``Velocity`` was actually loaded and converted — including
+        when ``"Velocity"`` was not in ``columns`` at all, so as to never assert
+        a convention for data that was not returned.
     """
     if ptype not in PTYPE:
         raise ValueError(f"ptype must be one of {sorted(PTYPE)}; got {ptype!r}")
@@ -213,9 +230,7 @@ def load_ic_particles(
             "redshift": redshift,
             "scale_factor": time,
             "use_peculiar_velocity": upv,
-            "velocity_units": (
-                "km/s (peculiar)" if velocity == "peculiar_kms" else "raw (as stored)"
-            ),
+            "velocity_units": None,       # filled in below, once we know what was loaded
             "Omega0": omega0,
             "OmegaLambda": omega_lambda,
         }
@@ -234,10 +249,17 @@ def load_ic_particles(
                     start = (-s) % subsample            # keep global indices == 0 mod subsample
                     parts.append(blk[s:end][start::subsample])
                 data[col] = np.concatenate(parts) if parts else blk[0:0]
-        if "Velocity" in data and velocity == "peculiar_kms":
-            data["Velocity"] = units.ic_velocity_to_peculiar_kms(
-                data["Velocity"], time, upv,
-            ).astype("f4", copy=False)
+        if "Velocity" in data:
+            if velocity == "peculiar_kms":
+                # Raises if upv is None (never guess); header keeps velocity_units=None
+                # on that path since we never reach the assignment below.
+                data["Velocity"] = units.ic_velocity_to_peculiar_kms(
+                    data["Velocity"], time, upv,
+                ).astype("f4", copy=False)
+                header["velocity_units"] = "km/s (peculiar)"
+            else:                                       # velocity == "raw"
+                header["velocity_units"] = "raw (as stored)"
+        # else: "Velocity" was not requested -> velocity_units stays None (nothing to label).
     return data, header
 
 
@@ -476,6 +498,19 @@ def load_ic_velocity_mesh(
     Velocities are peculiar km/s: the IC Header's ``UsePeculiarVelocity`` flag is
     read and applied (see :func:`priya_loader.units.ic_velocity_to_peculiar_kms`).
 
+    Memory: peak resident is ``~4x`` :func:`load_ic_density`'s peak at the same
+    ``nmesh`` — ``mom`` is ``3*nmesh^3`` float64 (vs. density's one ``nmesh^3``
+    grid), plus ``cnt`` (``nmesh^3`` float64) and one chunk's working set; the
+    ``field="velocity"`` normalisation divides ``mom`` in place rather than
+    allocating a second ``3*nmesh^3`` output. See the README's IC memory table
+    for a worked example — it does **not** apply as-is to this function.
+
+    Known inefficiency (deliberately deferred, not fixed here): each chunk calls
+    :func:`priya_loader.mesh.cic_paint` 4 times (once for ``cnt``, once per
+    velocity component for ``mom``), recomputing the same 8 CIC corner weights
+    each time. Correct but ~4x more painting work than necessary; left alone
+    because ``cic_paint`` itself is verified bit-for-bit and out of scope here.
+
     Returns
     -------
     ICVelocityField
@@ -547,7 +582,8 @@ def load_ic_velocity_mesh(
     empty = int((cnt == 0).sum())
     if field == "velocity":
         safe = np.where(cnt > 0, cnt, 1.0)          # 0/0 -> 0, never NaN
-        out = mom / safe
+        mom /= safe                                 # in-place: avoid a second 3*nmesh^3 f64 copy
+        out = mom
         if empty:
             warnings.warn(
                 f"{empty} of {nmesh ** 3} cells are empty (no particles) and were set "

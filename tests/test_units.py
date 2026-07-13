@@ -143,3 +143,32 @@ def test_ic_velocity_raises_when_flag_unknown():
     # Never guess a unit convention.
     with pytest.raises(ValueError, match="UsePeculiarVelocity"):
         units.ic_velocity_to_peculiar_kms(np.zeros((1, 3)), 0.01, use_peculiar_velocity=None)
+
+
+def test_ic_velocity_error_message_names_no_specific_kwarg():
+    # This ValueError is raised from both load_ic_particles (which has a
+    # `velocity=` kwarg) and load_ic_velocity_mesh (which does not), so the
+    # message must describe the problem without naming a remedy kwarg that may
+    # not exist on the caller.
+    with pytest.raises(ValueError) as exc_info:
+        units.ic_velocity_to_peculiar_kms(np.zeros((1, 3)), 0.01, use_peculiar_velocity=None)
+    assert "velocity=" not in str(exc_info.value)
+
+
+def test_ic_velocity_gadget2_flag_needs_scale_factor():
+    # flag=0 requires sqrt(a); scale_factor=None must raise ValueError (never
+    # guess), not crash inside np.sqrt(None) with a cryptic TypeError.
+    with pytest.raises(ValueError, match="scale factor"):
+        units.ic_velocity_to_peculiar_kms(
+            np.zeros((1, 3)), scale_factor=None, use_peculiar_velocity=0
+        )
+
+
+def test_ic_velocity_peculiar_flag_returns_same_array_object():
+    # Documented aliasing: flag=1 is an identity conversion and returns the
+    # caller's own array (no copy); flag=0 returns a freshly allocated array.
+    v = np.array([[1.0, -2.0, 3.0]], dtype="f4")
+    out_identity = units.ic_velocity_to_peculiar_kms(v, scale_factor=0.01, use_peculiar_velocity=1)
+    assert out_identity is v
+    out_scaled = units.ic_velocity_to_peculiar_kms(v, scale_factor=0.01, use_peculiar_velocity=0)
+    assert out_scaled is not v

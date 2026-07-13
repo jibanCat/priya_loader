@@ -11,12 +11,18 @@ Internal base units (the MP-Gadget defaults used by the PRIYA suite)
 * **Mass**     : ``UNIT_MASS_IN_G = 1.989e43`` g = 1e10 Msun/h.
 * **Velocity** : ``UNIT_VELOCITY_IN_CM_S = 1e5`` cm/s = 1 km/s.
 
-Velocity caveat (the Gadget sqrt(a) convention)
------------------------------------------------
-The velocity stored by MP-GenIC/MP-Gadget is ``u = v_peculiar / sqrt(a)`` (set
-in MP-Gadget ``libgenic/zeldovich.c``). To recover the physical peculiar
-velocity in km/s, multiply the stored value by ``sqrt(a)`` —
-see :func:`gadget_velocity_to_peculiar_kms`.
+Velocity caveat (the convention is a flag, not a constant)
+------------------------------------------------------------
+MP-GenIC can write the IC ``Velocity`` block in **either** of two conventions,
+recorded in the IC header's ``UsePeculiarVelocity`` attr: already-peculiar
+km/s (flag=1), or ``u = v_peculiar / sqrt(a)`` (flag=0, the Gadget-2
+convention; set in ``libgenic/zeldovich.c``), which needs multiplying by
+``sqrt(a)`` to recover peculiar km/s. **PRIYA's ICs use flag=1** — their
+``Velocity`` is already peculiar km/s, and applying ``sqrt(a)`` to it anyway
+is a 10x error at z=99. Always read the header flag; never assume. Call
+:func:`ic_velocity_to_peculiar_kms` (or use :func:`priya_loader.ic.
+load_ic_particles`, which does this for you), not
+:func:`gadget_velocity_to_peculiar_kms` directly.
 """
 from __future__ import annotations
 
@@ -174,21 +180,38 @@ def ic_velocity_to_peculiar_kms(velocity_stored, scale_factor, use_peculiar_velo
     their ``Velocity`` block is already peculiar km/s, and applying ``sqrt(a)`` to
     it would be a **10x error at z=99**.
 
+    Aliasing: when ``use_peculiar_velocity == 1`` this returns the caller's own
+    ``velocity_stored`` array unchanged (no copy — the identity conversion);
+    when ``== 0`` it returns a freshly allocated array (``velocity_stored *
+    sqrt(scale_factor)``). Don't rely on either behaviour; if you need to
+    mutate the result in place, copy it first.
+
     Raises
     ------
     ValueError
         If ``use_peculiar_velocity`` is None (flag absent from the Header): the
-        convention is then unknowable and guessing it silently corrupts velocities.
+        convention is then unknowable and guessing it silently corrupts
+        velocities. Also raised if ``use_peculiar_velocity == 0`` and
+        ``scale_factor`` is None: the ``sqrt(a)`` conversion is then
+        impossible, and we refuse to guess a scale factor just as we refuse to
+        guess the flag.
     """
     if use_peculiar_velocity is None:
         raise ValueError(
             "cannot convert IC velocities: the Header has no 'UsePeculiarVelocity' "
             "attr, so the stored convention is unknown (peculiar km/s vs v/sqrt(a)). "
-            "Pass velocity='raw' to get the stored block unmodified."
+            "Obtain the raw 'Velocity' block without conversion instead."
         )
     v = np.asarray(velocity_stored)
     if int(use_peculiar_velocity):
         return v                                   # already peculiar km/s
+    if scale_factor is None:
+        raise ValueError(
+            "cannot convert IC velocities: UsePeculiarVelocity == 0 (stored as "
+            "v_peculiar / sqrt(a)) but no scale factor is available (the Header "
+            "has neither 'Time' nor 'Redshift'), so the sqrt(a) factor cannot be "
+            "computed."
+        )
     return gadget_velocity_to_peculiar_kms(v, scale_factor)
 
 

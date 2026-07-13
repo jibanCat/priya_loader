@@ -266,6 +266,9 @@ def test_load_ic_particles_returns_raw_columns(tmp_path):
     # true cosmology instead of a hardcoded fallback.
     assert header["Omega0"] == pytest.approx(0.3)
     assert header["OmegaLambda"] == pytest.approx(0.7)
+    # "Velocity" was not requested, so the header must not assert a units
+    # convention for data it never loaded/converted.
+    assert header["velocity_units"] is None
 
 
 def test_load_ic_particles_subsample(tmp_path):
@@ -319,16 +322,20 @@ def test_velocity_without_flag_raises(tmp_path):
                          use_peculiar_velocity=None)
     with pytest.raises(ValueError, match="UsePeculiarVelocity"):
         ic.load_ic_particles(p, ptype="dm", columns=("Velocity",))
-    # ...but 'raw' still works, since no conversion is implied.
-    data, _ = ic.load_ic_particles(p, ptype="dm", columns=("Velocity",), velocity="raw")
+    # ...but 'raw' still works, since no conversion is implied -- and the header
+    # can still label it "raw (as stored)" even though upv is unknown, since raw
+    # makes no claim about the convention.
+    data, header = ic.load_ic_particles(p, ptype="dm", columns=("Velocity",), velocity="raw")
     assert data["Velocity"].shape == (4 ** 3, 3)
+    assert header["velocity_units"] == "raw (as stored)"
 
 
 def test_position_only_load_needs_no_velocity_flag(tmp_path):
     """A Position-only load must not be broken by a missing velocity flag."""
     p = _make_ic_bigfile(tmp_path / "ic", ngrid=4, use_peculiar_velocity=None)
-    data, _ = ic.load_ic_particles(p, ptype="dm", columns=("Position",))
+    data, header = ic.load_ic_particles(p, ptype="dm", columns=("Position",))
     assert data["Position"].shape == (4 ** 3, 3)
+    assert header["velocity_units"] is None
 
 
 def test_bad_velocity_kwarg_raises(tmp_path):
@@ -386,6 +393,53 @@ def test_velocity_mesh_uses_peculiar_units(tmp_path):
     vf = ic.load_ic_velocity_mesh(p, ptype="dm", nmesh=8, field="velocity")
     np.testing.assert_allclose(vf.v[0], 10.0 * 0.1, rtol=1e-4)   # x sqrt(0.01)
     assert vf.units == "km/s (peculiar)"
+
+
+def test_icvelocityfield_meta_default_is_independent_per_instance():
+    """Regression guard for the field/units name-shadowing hazard: ICVelocityField
+    has attributes named .field and .units, which shadow dataclasses.field and
+    priya_loader.units inside the class body. Constructing two instances without
+    a `meta=` kwarg must still give each its own independent {} (not a shared
+    mutable default), proving the meta= dc_field(default_factory=dict) wiring
+    still works."""
+    a = ic.ICVelocityField(v=np.zeros((3, 1, 1, 1), dtype="f4"), nmesh=1, box=1.0,
+                           ptype="dm", redshift=99.0, field="velocity", npart=1)
+    b = ic.ICVelocityField(v=np.zeros((3, 1, 1, 1), dtype="f4"), nmesh=1, box=1.0,
+                           ptype="dm", redshift=99.0, field="velocity", npart=1)
+    assert a.meta == {} and b.meta == {}
+    a.meta["x"] = 1
+    assert b.meta == {}
+    assert a.field == "velocity"                # public attribute name unchanged
+    assert a.units == "km/s (peculiar)"          # public attribute name unchanged
+
+
+def test_velocity_mesh_pins_axis_order(tmp_path):
+    """v_x/v_y/v_z ramp with the particle's Lagrangian i/j/k index, so a
+    transposed spatial axis or a swapped velocity-component index would put the
+    ramp on the wrong mesh axis. With nmesh==ngrid each particle sits exactly at
+    a cell centre (same alignment as test_origin_alignment_single_particle), so
+    every mesh cell must recover its particle's velocity exactly: no blending
+    to hide a transpose bug behind CIC smoothing."""
+    ngrid = 8
+    box = 120000.0
+    H = box / ngrid
+    # Cell-VERTEX positions (i*H, not (i+0.5)*H): CIC then deposits each particle
+    # with weight 1 fully into a single node (as in test_origin_alignment_single_particle),
+    # so there is no cross-cell blending to hide a transpose bug behind.
+    g = np.arange(ngrid) * H
+    ii, jj, kk = np.meshgrid(np.arange(ngrid), np.arange(ngrid), np.arange(ngrid),
+                              indexing="ij")
+    X, Y, Z = np.meshgrid(g, g, g, indexing="ij")
+    pos = np.stack([X.ravel(), Y.ravel(), Z.ravel()], axis=1).astype("f8")
+    # v_x depends only on the x-index i, v_y only on j, v_z only on k.
+    vel = np.stack([ii.ravel(), jj.ravel(), kk.ravel()], axis=1).astype("f4") * 10.0
+    p = _make_ic_bigfile(tmp_path / "ic", ngrid=ngrid, box=box, positions=pos,
+                         velocities=vel, time=0.01, use_peculiar_velocity=1)
+    vf = ic.load_ic_velocity_mesh(p, ptype="dm", nmesh=ngrid, field="velocity")
+    assert vf.meta["empty_cells"] == 0
+    np.testing.assert_allclose(vf.v[0], 10.0 * ii, rtol=1e-5, atol=1e-4)
+    np.testing.assert_allclose(vf.v[1], 10.0 * jj, rtol=1e-5, atol=1e-4)
+    np.testing.assert_allclose(vf.v[2], 10.0 * kk, rtol=1e-5, atol=1e-4)
 
 
 def test_velocity_mesh_bad_field_raises(tmp_path):

@@ -600,6 +600,30 @@ def test_load_ic_particles_raises_on_half_written_block(tmp_path):
     assert data["Position"].shape == (100, 3)
 
 
+def test_load_ic_density_cic_raises_on_half_written_block(tmp_path):
+    """load_ic_density(field="cic") -- PriyaDataset's DEFAULT path -- must reject a
+    half-written Position block, not paint it into a wrong-mean overdensity.
+
+    The partial-transfer guard was wired into the sibling loaders but not into this
+    branch. A nonzero-but-incomplete Position block CIC-paints to a valid-looking
+    nmesh^3 field with the wrong mean and a hole over the untransferred region; painting
+    raises nothing (only the fully-empty case tripped to_overdensity), so PriyaDataset's
+    `except -> ic=None` never fired and the corrupt IC flowed silently into Sample.ic
+    (and Roger's b_F). Now it raises, like the sibling loaders on the identical IC.
+    """
+    p = _bare_ic_with_totnumpart(tmp_path / "half", npos=60, totnumpart=100)
+    with pytest.raises(ValueError, match="partially written|60 of 100"):
+        ic.load_ic_density(p, ptype="dm", nmesh=4, field="cic")
+    # the empty skeleton still raises (now with a clear message, before painting)
+    e = _bare_ic(tmp_path / "empty", 0, 0, flag=None)
+    with pytest.raises(ValueError, match="empty|skeleton"):
+        ic.load_ic_density(e, ptype="dm", nmesh=4, field="cic")
+    # a complete block still loads
+    q = _bare_ic_with_totnumpart(tmp_path / "whole", npos=100, totnumpart=100)
+    f = ic.load_ic_density(q, ptype="dm", nmesh=4, field="cic")
+    assert f.npart == 100
+
+
 def test_load_ic_particles_rejects_ragged_columns(tmp_path):
     """Position(100) + Velocity(60) must raise, not silently row-misalign.
 

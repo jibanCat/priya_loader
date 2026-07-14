@@ -44,6 +44,25 @@ All notable changes to `priya_loader`. Format loosely follows
   explicit that the low-res ICs are **512³**, and walks through loader usage plus
   simple matplotlib visualizations of the parameters, τ/flux fields, and IC density.
 
+### Fixed
+- **`subsample` now bounds peak memory, not just the returned row count.** A strided
+  slice of a bigfile chunk is a numpy *view* that keeps its whole parent chunk alive,
+  so accumulating subsampled views pinned the entire `Position` block regardless of
+  `subsample` — the "memory-aware" subsample the README and notebook recommend could
+  OOM a login node. The slice is now copied. Measured on a real 512³ IC: a 67k-particle
+  sample dropped from **3.26 GB → 0.31 GB** peak RSS (the block is 87 GB at 1536³, 696 GB
+  at 3072³). Pre-existing since v0.1.0; the deliverable's docs lean on this call.
+- **The IC loaders now raise on a skeleton or half-written (mid-transfer) IC** instead
+  of silently returning empty or partial arrays. Each particle block is checked against
+  the Header's `TotNumPart`, so a partially transferred IC — which would paint a `δ₁`
+  (hence a `b_F`) with the wrong mean and a hole where the untransferred Lagrangian
+  region is, with no diagnostic — now fails loudly and names the unstaged simulation.
+  The guard covers all three IC loaders, including `load_ic_density(field="cic")` — the
+  path `PriyaDataset` loads by default, and the one that would otherwise carry a corrupt
+  IC straight into `Sample.ic`.
+- `header["velocity_units"]` no longer asserts `"km/s (peculiar)"` when `Velocity` was
+  not loaded, or when the IC header lacks the `UsePeculiarVelocity` flag.
+
 ## [0.1.0] — 2026-06-29
 
 First tagged release. ML-friendly access to the PRIYA MP-Gadget Lyman-α suite.

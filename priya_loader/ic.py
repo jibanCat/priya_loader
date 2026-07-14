@@ -535,6 +535,14 @@ def load_ic_density(
                 )
             block = bf[block_name]
             npart = int(block.size)
+            # A partial/skeleton Position block CIC-paints to a valid-looking mesh
+            # with the wrong mean and a hole over the untransferred Lagrangian region
+            # -- a silently wrong delta_1, hence a wrong b_F. Reject it here, as the
+            # sibling loaders (load_ic_particles / load_ic_velocity_mesh) already do.
+            # This is the path PriyaDataset takes by default (ic_field="cic"), whose
+            # `except -> ic=None` guard only fires on a raise -- so the guard matters
+            # most here of all.
+            _check_block_complete(ic_dir, block_name, npart, _expected_npart(attrs, keys, t))
             rho = np.zeros((nmesh, nmesh, nmesh), dtype=np.float64)
             for start in range(0, npart, chunk_size):
                 stop = min(start + chunk_size, npart)

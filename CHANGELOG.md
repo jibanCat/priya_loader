@@ -14,6 +14,12 @@ All notable changes to `priya_loader`. Format loosely follows
 - `units.ic_velocity_to_peculiar_kms` — converts a stored IC `Velocity` block to
   peculiar km/s by dispatching on the IC header's `UsePeculiarVelocity` flag.
 - `notebooks/ic_particles.ipynb` — short demo of DM positions/velocities.
+- `PriyaDataset(..., ic_companion_fallback=True)` — when the production-resolution IC is
+  not staged (the NERSC reality: only the 512³ `120_512_99` companion is transferred),
+  fall back to the largest staged companion instead of yielding `ic=None` for every sim.
+  Opt-in (default off); the production grid is still preferred when present.
+  `Sample.meta["ic_meta"]["ic_is_production"]` records which grid was used — a companion
+  is the same realization at lower particle resolution.
 - Real-IC test asserting `v_rms` matches linear theory `a·H·f·σ_disp` (catches a
   `sqrt(a)` units error, which is a 10× effect at z=99).
 - `tests/test_real_ic.py` — real-IC verification, gated behind `PRIYA_REAL_IC`

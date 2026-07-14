@@ -124,6 +124,31 @@ def test_load_ic_false_skips_ic(tmp_path):
     assert s.ic is None
 
 
+def test_ic_companion_fallback(tmp_path):
+    """Production IC absent + ic_companion_fallback=True -> load the 512^3 companion
+    (flagged non-production). Default is opt-out (ic=None). Production, when staged,
+    is still preferred. This is the NERSC reality: only the 512^3 companion is staged,
+    so without the opt-in the headline [params, z, ic, tau] loop yields ic=None."""
+    # (a) production 1536^3 config, NOT staged, but a 512^3 companion IS present
+    root = tmp_path / "companion_only"
+    root.mkdir()
+    d = _make_sim(root, NAME_A, JSON_A, snaps=(4,), with_ic=False)     # production not staged
+    _write_ic(d / "ICS" / "120_512_99", ng=8)                         # 8^3 = 512 -> companion
+    assert list(ds.PriyaDataset(root, ic_nmesh=8))[0].ic is None      # default: production-only
+    with pytest.warns(Warning, match="companion|production IC not staged"):
+        s = list(ds.PriyaDataset(root, ic_nmesh=8, ic_companion_fallback=True))[0]
+    assert s.ic is not None and s.ic.shape == (8, 8, 8)
+    assert s.meta["ic_meta"]["ic_is_production"] is False
+
+    # (b) production staged -> fallback still prefers it, flagged production
+    root2 = tmp_path / "with_prod"
+    root2.mkdir()
+    _make_sim(root2, NAME_A, JSON_A, snaps=(4,), with_ic=True)         # production 120_1536_99 present
+    s2 = list(ds.PriyaDataset(root2, ic_nmesh=8, ic_companion_fallback=True))[0]
+    assert s2.ic is not None
+    assert s2.meta["ic_meta"]["ic_is_production"] is True
+
+
 def test_skips_sim_without_tau(tmp_path):
     _make_sim(tmp_path, NAME_A, JSON_A, snaps=())
     assert list(ds.PriyaDataset(tmp_path, ic_nmesh=8)) == []

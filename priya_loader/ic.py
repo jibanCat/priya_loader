@@ -39,8 +39,35 @@ What this field IS
   window; deconvolve for an unbiased finite-k cross-spectrum (see
   :mod:`priya_loader.mesh`). (The ``"icdensity"`` route's window is a *sinc*
   top-hat, not ``sinc^2`` — see above.)
-* **``ptype="dm"`` is a total-matter proxy** — exact at ``k -> 0``; baryons
-  differ at the percent level on quasilinear scales at z=99.
+* **``ptype="dm"`` is the CDM field, NOT the total-matter field.** This matters for
+  the bias amplitude, so read it before you normalise anything. Each species is
+  drawn from its own CLASS transfer function (``DifferentTransferFunctions=1`` in
+  PRIYA), and at z=99 the baryons still lag the CDM (``d_b/d_cdm ~ 0.65-0.71`` over
+  ``0.1 < k < 2`` h/Mpc). So::
+
+      P(delta_1 | ptype="dm") / P_total-matter = (T_cdm / T_matter)^2 ~ 1.09
+
+  i.e. the ``ptype="dm"`` field is **~4.6% high in amplitude** (~9-11% in power)
+  relative to total matter — **flat in k**, and it does **NOT** vanish as
+  ``k -> 0`` (it is largest there: 1.116 at k=0.1). Measured on the staged 512^3 IC
+  against ``ICS/inputspec_*.txt`` (the linear P(k) GenIC was handed): measured
+  ratio **1.105**, predicted from the sim's own ``camb_linear/ics_transfer_99.dat``
+  **1.093** — agreement to 1%, so this is species physics, not a loader artefact.
+
+  Consequences:
+    - **Consistency is what saves you.** ``b_F = P_{F,delta} / P_{delta,delta}`` is a
+      ratio, so measuring both from *this same* field is fine. The error creeps in
+      when you mix — e.g. taking ``P_{delta,delta}`` from a CAMB/CLASS **total-matter**
+      spectrum while the cross term uses this CDM field. That mis-normalises ``b_F``
+      by ~4.6%.
+    - For a genuine total-matter ``delta_1``, combine the species:
+      ``delta_m = (1-f_b) * delta_cdm + f_b * delta_gas`` with ``f_b = Omega_b/Omega_0``
+      (0.154 for this sim). NOTE: the gas ``field="icdensity"`` route is currently
+      unusable (gas is a *glass*, not a Lagrangian grid — see that route's caveats),
+      so this needs the gas ``"cic"`` route or a paint-at-``Position`` of gas ``ICDensity``.
+    - The velocity field does **not** carry this offset: ``-div(v)/(aHf)`` reproduces
+      the *total-matter* input spectrum to **0.2%** (verified in
+      ``tests/test_real_ic.py``).
 
 Co-registration with a tau cube (read this before cross-correlating)
 --------------------------------------------------------------------
@@ -82,7 +109,8 @@ from __future__ import annotations
 
 import os
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from typing import Any, Dict, Union
 
 import numpy as np
@@ -93,6 +121,13 @@ StrPath = Union[str, os.PathLike]
 
 #: particle-type name -> bigfile block prefix (MP-Gadget convention: 0 gas, 1 DM)
 PTYPE = {"gas": 0, "dm": 1}
+
+#: the honest unit label for each ``load_ic_velocity_mesh`` field. Single source of
+#: truth: the "momentum" branch is an un-normalised CIC sum, NOT km/s.
+UNITS_BY_FIELD = {
+    "velocity": "km/s (peculiar)",
+    "momentum": "km/s (peculiar) x particles-per-cell (un-normalised CIC sum)",
+}
 
 
 @dataclass
@@ -107,7 +142,44 @@ class ICField:
     npart: int                   # particles painted
     axes: tuple = ("x", "y", "z")
     space: str = "real"          # real space (cf. TauGrid.space == "redshift")
-    meta: Dict[str, Any] = field(default_factory=dict, repr=False)
+    meta: Dict[str, Any] = dc_field(default_factory=dict, repr=False)
+
+
+@dataclass
+class ICVelocityField:
+    """IC velocity (``field="velocity"``, peculiar km/s) or un-normalised CIC
+    momentum (``field="momentum"``, km/s x particles-per-cell) field on a mesh.
+    Check ``.units`` — the two branches are NOT in the same units.
+
+    Note: the public attributes ``.field`` and ``.units`` intentionally shadow
+    the module-level names ``dataclasses.field`` and ``priya_loader.units``
+    inside this class body (they are already documented/used by that name in
+    the notebook and README, so we don't rename them). That's why the ``field``
+    import above is aliased to ``dc_field`` for the ``meta`` default below:
+    unaliased, giving ``field`` a default value here (rather than leaving it
+    annotation-only) would silently rebind the class-body name ``field`` to a
+    plain string, and ``field(default_factory=dict, ...)`` would then try to
+    call a ``str`` and raise a confusing ``TypeError``.
+    """
+
+    v: np.ndarray                # (3, nmesh, nmesh, nmesh) float32
+    nmesh: int
+    box: float                   # Mpc/h
+    ptype: str                   # "gas" | "dm"
+    redshift: float              # IC redshift (z_init, ~99)
+    field: str                   # "velocity" (p/n) | "momentum" (p)
+    npart: int
+    units: str = ""              # derived from `field` when not given (see __post_init__)
+    axes: tuple = ("x", "y", "z")
+    space: str = "real"
+    meta: Dict[str, Any] = dc_field(default_factory=dict, repr=False)
+
+    def __post_init__(self):
+        # `units` must never default to km/s: the "momentum" branch is not in km/s,
+        # and `field` is required, so we can always derive the honest label. A plain
+        # default would silently mislabel any momentum field a consumer reconstructs.
+        if not self.units:
+            self.units = UNITS_BY_FIELD[self.field]
 
 
 def load_ic_particles(
@@ -116,6 +188,7 @@ def load_ic_particles(
     columns=("Position",),
     subsample: int = 1,
     chunk_size: int = 8_000_000,
+    velocity: str = "peculiar_kms",
 ):
     """Load **raw** IC particle columns — NO meshing — so you can paint with your
     own CIC (nbodykit / Pylians) or use the positions directly.
@@ -129,21 +202,44 @@ def load_ic_particles(
     ----------
     ic_dir, ptype : as :func:`load_ic_density`.
     columns : tuple of {"Position", "Velocity", "ICDensity", "ID"}
-        Blocks to read. ``Position`` is comoving kpc/h.
+        Blocks to read. ``Position`` is comoving kpc/h. ``Velocity`` is peculiar
+        km/s by default (see ``velocity``).
     subsample : int
         Keep every ``subsample``-th particle (strided, memory-aware). For a full
         1536^3/3072^3 load prefer a compute node or ``nbodykit.BigFileCatalog``.
+    velocity : {"peculiar_kms", "raw"}
+        How to return the ``Velocity`` column (ignored if ``"Velocity"`` is not
+        in ``columns``). ``"peculiar_kms"`` (default) converts the stored block
+        to physical peculiar km/s by dispatching on the IC Header's
+        ``UsePeculiarVelocity`` flag (see :func:`priya_loader.units.
+        ic_velocity_to_peculiar_kms`); PRIYA sets this flag to 1, so PRIYA
+        velocities are guaranteed to come back unchanged. ``"raw"`` returns the
+        stored block unmodified, whatever its convention. If the flag is absent
+        from the Header, ``"peculiar_kms"`` raises rather than guessing.
 
     Returns
     -------
     (data, header) : (dict[str, np.ndarray], dict)
         ``data[col]`` arrays; ``header`` has ``box_mpc_h``, ``box_kpc_h``,
-        ``hubble``, ``redshift``.
+        ``hubble``, ``redshift``, ``scale_factor``, ``use_peculiar_velocity``,
+        ``velocity_units``, ``Omega0``, ``OmegaLambda`` (``None`` if the IC
+        Header lacks either attr). ``velocity_units`` is ``"km/s (peculiar)"``
+        when ``"Velocity"`` was requested and converted, ``"raw (as stored)"``
+        when ``"Velocity"`` was requested with ``velocity="raw"``, and ``None``
+        whenever no ``Velocity`` was actually loaded and converted — including
+        when ``"Velocity"`` was not in ``columns`` at all, so as to never assert
+        a convention for data that was not returned.
     """
     if ptype not in PTYPE:
         raise ValueError(f"ptype must be one of {sorted(PTYPE)}; got {ptype!r}")
     if subsample < 1:
         raise ValueError(f"subsample must be >= 1; got {subsample}")
+    if chunk_size < 1:
+        # chunk_size <= 0 makes range(0, n, chunk_size) raise deep in the read loop
+        # (or, for a huge value, defeats the streaming this function exists for).
+        raise ValueError(f"chunk_size must be >= 1; got {chunk_size}")
+    if velocity not in ("peculiar_kms", "raw"):
+        raise ValueError(f"velocity must be 'peculiar_kms' or 'raw'; got {velocity!r}")
     try:
         import bigfile
     except ImportError as e:  # pragma: no cover
@@ -162,24 +258,57 @@ def load_ic_particles(
         except Exception as e:
             raise ValueError(f"{ic_dir}: cannot read IC Header ({e!r}); skeleton/corrupt?") from e
         box_kpc_h = _attr(attrs, "BoxSize") if "BoxSize" in keys else float("nan")
+        time = _attr(attrs, "Time") if "Time" in keys else None
         if "Redshift" in keys:
             redshift = _attr(attrs, "Redshift")
-        elif "Time" in keys:
-            redshift = units.scale_factor_to_redshift(_attr(attrs, "Time"))
+        elif time is not None:
+            redshift = units.scale_factor_to_redshift(time)
         else:
             redshift = float("nan")
+        if time is None and np.isfinite(redshift):
+            time = units.redshift_to_scale_factor(redshift)
+        upv = int(_attr(attrs, "UsePeculiarVelocity")) if "UsePeculiarVelocity" in keys else None
+        omega0 = _attr(attrs, "Omega0") if "Omega0" in keys else None
+        omega_lambda = _attr(attrs, "OmegaLambda") if "OmegaLambda" in keys else None
+        omega_b = _attr(attrs, "OmegaBaryon") if "OmegaBaryon" in keys else None
         header = {
             "box_kpc_h": box_kpc_h,
             "box_mpc_h": units.kpc_h_to_mpc_h(box_kpc_h),
             "hubble": _attr(attrs, "HubbleParam") if "HubbleParam" in keys else None,
             "redshift": redshift,
+            "scale_factor": time,
+            "use_peculiar_velocity": upv,
+            "velocity_units": None,       # filled in below, once we know what was loaded
+            "Omega0": omega0,
+            "OmegaLambda": omega_lambda,
+            "OmegaBaryon": omega_b,   # f_b = OmegaBaryon/Omega0: needed to build total-matter delta_1
         }
+        # All requested columns describe the SAME particles, so they must be the same
+        # length. On a mid-transfer IC (the normal state of this archive) they need
+        # not be — and returning e.g. Position(100) with Velocity(60) would silently
+        # attach velocities to the wrong particles. Check before reading anything.
+        sizes = {}
         for col in columns:
             name = f"{t}/{col}"
             if name not in bf.blocks:
                 raise ValueError(f"{ic_dir}: no '{name}' block (ptype={ptype!r}, column={col!r})")
+            sizes[col] = int(bf[name].size)
+        if len(set(sizes.values())) > 1:
+            raise ValueError(
+                f"{ic_dir}: requested columns have different lengths {sizes} — they index the "
+                f"same particles, so this IC is partially written (skeleton/mid-transfer)"
+            )
+        # ...and equal-but-wrong is still wrong: an empty or half-written block must not
+        # come back as a valid-looking particle set. (The sibling loaders raise here; this
+        # one used to return an empty array stamped "km/s (peculiar)" -> a NaN v_rms.)
+        expected = _expected_npart(attrs, keys, t)
+        for col, n_col in sizes.items():
+            _check_block_complete(ic_dir, f"{t}/{col}", n_col, expected)
+
+        for col in columns:
+            name = f"{t}/{col}"
             blk = bf[name]
-            n = int(blk.size)
+            n = sizes[col]
             if subsample == 1:
                 data[col] = blk[:]
             else:
@@ -187,8 +316,24 @@ def load_ic_particles(
                 for s in range(0, n, chunk_size):
                     end = min(s + chunk_size, n)
                     start = (-s) % subsample            # keep global indices == 0 mod subsample
-                    parts.append(blk[s:end][start::subsample])
+                    # .copy() is load-bearing, not defensive: a strided slice is a VIEW that
+                    # keeps its whole (chunk_size-row) parent alive. Holding those views in
+                    # `parts` would pin every chunk ever read -- i.e. the entire block -- so
+                    # `subsample` would bound the OUTPUT but not the MEMORY (87 GB of Position
+                    # at 1536^3). Copying releases each chunk at the end of its iteration.
+                    parts.append(blk[s:end][start::subsample].copy())
                 data[col] = np.concatenate(parts) if parts else blk[0:0]
+        if "Velocity" in data:
+            if velocity == "peculiar_kms":
+                # Raises if upv is None (never guess); header keeps velocity_units=None
+                # on that path since we never reach the assignment below.
+                data["Velocity"] = units.ic_velocity_to_peculiar_kms(
+                    data["Velocity"], time, upv,
+                ).astype("f4", copy=False)
+                header["velocity_units"] = "km/s (peculiar)"
+            else:                                       # velocity == "raw"
+                header["velocity_units"] = "raw (as stored)"
+        # else: "Velocity" was not requested -> velocity_units stays None (nothing to label).
     return data, header
 
 
@@ -267,6 +412,35 @@ def _load_icdensity_grid(bf, t, nmesh, chunk_size):
     return (ssum / cnt).reshape(nmesh, nmesh, nmesh).astype(np.float32), npart
 
 
+def _expected_npart(attrs, keys, t):
+    """Particles this type SHOULD have, from the Header's ``TotNumPart`` (i8[6]).
+
+    Lets us tell a *complete* block from a half-transferred one: a partially written
+    Position block loads as a perfectly valid-looking particle set, and CIC-painting
+    it over the full box silently gives a density field with the wrong mean and a
+    hole where the untransferred Lagrangian region is. Returns None if the Header
+    does not carry the count (then we cannot check).
+    """
+    if "TotNumPart" not in keys:
+        return None
+    tot = np.asarray(attrs["TotNumPart"]).ravel()
+    return int(tot[t]) if tot.size > t else None
+
+
+def _check_block_complete(ic_dir, name, n, expected):
+    """Raise unless block ``name`` has all ``expected`` particles (skeleton/mid-transfer)."""
+    if n == 0:
+        raise ValueError(
+            f"{ic_dir}: '{name}' is empty (0 particles); skeleton/mid-transfer IC?"
+        )
+    if expected is not None and n != expected:
+        raise ValueError(
+            f"{ic_dir}: '{name}' has {n} of {expected} particles (Header TotNumPart) — "
+            f"the block is partially written (mid-transfer IC), so any field built from "
+            f"it would be silently wrong"
+        )
+
+
 def _attr(attrs, key):
     """Read a scalar bigfile Header attr as a python float.
 
@@ -343,6 +517,7 @@ def load_ic_density(
         hubble = _attr(attrs, "HubbleParam") if "HubbleParam" in keys else None
         omega0 = _attr(attrs, "Omega0") if "Omega0" in keys else None
         omega_lambda = _attr(attrs, "OmegaLambda") if "OmegaLambda" in keys else None
+        omega_b = _attr(attrs, "OmegaBaryon") if "OmegaBaryon" in keys else None
         time = _attr(attrs, "Time") if "Time" in keys else None
         if "Redshift" in keys:
             redshift = _attr(attrs, "Redshift")
@@ -360,6 +535,14 @@ def load_ic_density(
                 )
             block = bf[block_name]
             npart = int(block.size)
+            # A partial/skeleton Position block CIC-paints to a valid-looking mesh
+            # with the wrong mean and a hole over the untransferred Lagrangian region
+            # -- a silently wrong delta_1, hence a wrong b_F. Reject it here, as the
+            # sibling loaders (load_ic_particles / load_ic_velocity_mesh) already do.
+            # This is the path PriyaDataset takes by default (ic_field="cic"), whose
+            # `except -> ic=None` guard only fires on a raise -- so the guard matters
+            # most here of all.
+            _check_block_complete(ic_dir, block_name, npart, _expected_npart(attrs, keys, t))
             rho = np.zeros((nmesh, nmesh, nmesh), dtype=np.float64)
             for start in range(0, npart, chunk_size):
                 stop = min(start + chunk_size, npart)
@@ -389,7 +572,183 @@ def load_ic_density(
             # to rescale this z_init field to the flux redshift (see docstring):
             "Omega0": omega0,
             "OmegaLambda": omega_lambda,
+            "OmegaBaryon": omega_b,   # f_b = OmegaBaryon/Omega0: needed to build total-matter delta_1
             "Time": time,
             "los_is_velocity_axis": False,           # real space (cf. tau)
+        },
+    )
+
+
+def load_ic_velocity_mesh(
+    ic_dir: StrPath,
+    ptype: str = "dm",
+    nmesh: int = 256,
+    field: str = "velocity",
+    chunk_size: int = 8_000_000,
+) -> ICVelocityField:
+    """CIC-paint the IC particle velocities onto an ``nmesh^3`` mesh.
+
+    Streams ``Position`` + ``Velocity`` in chunks and accumulates, per component
+    ``a``, the CIC momentum and the CIC counts::
+
+        p_a(x) = sum_i v_{i,a} W(x - x_i)      n(x) = sum_i W(x - x_i)
+
+    (Particles are equal-mass, so the mass factors out of ``p/n``.)
+
+    Parameters
+    ----------
+    ic_dir, ptype, nmesh, chunk_size : as :func:`load_ic_density`.
+    field : {"velocity", "momentum"}
+        ``"velocity"`` (default): ``p / n`` — the CIC-weighted mean velocity in
+        each cell, in **peculiar km/s**. Cells with no particles are set to **0**
+        and counted in ``meta["empty_cells"]`` (a warning is raised if any); at
+        z ~ 99 with ``nmesh <= ngrid`` there should be none, so a nonzero count
+        means your mesh is finer than the particle grid.
+        ``"momentum"``: the raw, **un-normalised** CIC sum ``p = sum_i v_i W_i``
+        — linear in ``v``, so this is the field to Fourier transform for a
+        momentum / velocity-divergence spectrum without the ``p/n`` ratio's noise
+        in low-density cells. Its units are **km/s x particles-per-cell**, NOT
+        km/s: at ``nmesh=128`` on a 512^3 IC that is ~64x the velocity.
+        To recover km/s, divide by the CIC **counts**::
+
+            cic = load_ic_density(ic_dir, ptype=..., nmesh=nmesh, field="cic")
+            counts = (1.0 + cic.delta) * vf.meta["mean_particles_per_cell"]
+            v_kms = vf.v / np.where(counts > 0, counts, 1.0)
+
+        Note the ``mean_particles_per_cell`` factor: ``1 + delta`` is the count grid
+        normalised by its **mean**, so dividing by ``1 + delta`` alone leaves the
+        mean count in and overstates the velocity by exactly that factor.
+        ``ICVelocityField.units`` reports which of the two fields you got.
+
+    Velocities are peculiar km/s: the IC Header's ``UsePeculiarVelocity`` flag is
+    read and applied (see :func:`priya_loader.units.ic_velocity_to_peculiar_kms`).
+
+    Memory: peak resident is ``~4x`` :func:`load_ic_density`'s peak at the same
+    ``nmesh`` — ``mom`` is ``3*nmesh^3`` float64 (vs. density's one ``nmesh^3``
+    grid), plus ``cnt`` (``nmesh^3`` float64) and one chunk's working set; the
+    ``field="velocity"`` normalisation divides ``mom`` in place rather than
+    allocating a second ``3*nmesh^3`` output. See the README's IC memory table
+    for a worked example — it does **not** apply as-is to this function.
+
+    Known inefficiency (deliberately deferred, not fixed here): each chunk calls
+    :func:`priya_loader.mesh.cic_paint` 4 times (once for ``cnt``, once per
+    velocity component for ``mom``), recomputing the same 8 CIC corner weights
+    each time. Correct but ~4x more painting work than necessary; left alone
+    because ``cic_paint`` itself is verified bit-for-bit and out of scope here.
+
+    Returns
+    -------
+    ICVelocityField
+        ``v`` has shape ``(3, nmesh, nmesh, nmesh)``, indexed ``[component][x,y,z]``
+        on the same grid/origin as :class:`ICField` (so it co-registers with the
+        density mesh and, via the HANDOFF recipe, with tau).
+    """
+    if ptype not in PTYPE:
+        raise ValueError(f"ptype must be one of {sorted(PTYPE)}; got {ptype!r}")
+    if field not in ("velocity", "momentum"):
+        raise ValueError(f"field must be 'velocity' or 'momentum'; got {field!r}")
+    if nmesh < 1 or chunk_size < 1:
+        raise ValueError(f"nmesh and chunk_size must be >= 1 (got {nmesh}, {chunk_size})")
+    try:
+        import bigfile
+    except ImportError as e:  # pragma: no cover
+        raise ImportError("reading ICs needs bigfile: pip install priya_loader[ic]") from e
+
+    t = PTYPE[ptype]
+    try:
+        bf = bigfile.File(str(ic_dir))
+    except Exception as e:
+        raise ValueError(f"{ic_dir}: cannot open IC bigfile ({e!r})") from e
+    with bf:
+        try:
+            attrs = bf["Header"].attrs
+            keys = set(attrs.keys())
+        except Exception as e:
+            raise ValueError(f"{ic_dir}: cannot read IC Header ({e!r}); skeleton/corrupt?") from e
+        if "BoxSize" not in keys:
+            raise ValueError(f"{ic_dir}: Header has no BoxSize")
+        box_kpc_h = _attr(attrs, "BoxSize")
+        hubble = _attr(attrs, "HubbleParam") if "HubbleParam" in keys else None
+        omega0 = _attr(attrs, "Omega0") if "Omega0" in keys else None
+        omega_lambda = _attr(attrs, "OmegaLambda") if "OmegaLambda" in keys else None
+        omega_b = _attr(attrs, "OmegaBaryon") if "OmegaBaryon" in keys else None
+        time = _attr(attrs, "Time") if "Time" in keys else None
+        if "Redshift" in keys:
+            redshift = _attr(attrs, "Redshift")
+        elif time is not None:
+            redshift = units.scale_factor_to_redshift(time)
+        else:
+            redshift = float("nan")
+            warnings.warn(f"{ic_dir}: Header has no Redshift/Time; redshift set to NaN")
+        if time is None and np.isfinite(redshift):
+            time = units.redshift_to_scale_factor(redshift)
+        upv = int(_attr(attrs, "UsePeculiarVelocity")) if "UsePeculiarVelocity" in keys else None
+
+        for blk in (f"{t}/Position", f"{t}/Velocity"):
+            if blk not in bf.blocks:
+                raise ValueError(f"{ic_dir}: no '{blk}' block (ptype={ptype!r})")
+        pblk, vblk = bf[f"{t}/Position"], bf[f"{t}/Velocity"]
+        npart = int(pblk.size)
+        if int(vblk.size) != npart:
+            raise ValueError(
+                f"{ic_dir}: Position ({npart}) and Velocity ({vblk.size}) sizes differ"
+            )
+        # An empty or half-written block must not become an all-zero cube stamped
+        # "km/s (peculiar)" — a unit we never applied, on data that does not exist.
+        _expected = _expected_npart(attrs, keys, t)
+        _check_block_complete(ic_dir, f"{t}/Position", npart, _expected)
+        # Validate the velocity convention BEFORE the loop: the conversion lives
+        # inside it, so a flag-less IC would otherwise only raise once the first
+        # chunk is read — and never at all if there were no chunks.
+        units.ic_velocity_to_peculiar_kms(np.zeros((0, 3), "f4"), time, upv)
+
+        mom = np.zeros((3, nmesh, nmesh, nmesh), dtype=np.float64)
+        cnt = np.zeros((nmesh, nmesh, nmesh), dtype=np.float64)
+        for start in range(0, npart, chunk_size):
+            stop = min(start + chunk_size, npart)
+            pos = pblk[start:stop]                                   # (chunk, 3) kpc/h
+            vel = units.ic_velocity_to_peculiar_kms(vblk[start:stop], time, upv)
+            mesh.cic_paint(pos, nmesh, boxsize=box_kpc_h, out=cnt)   # counts
+            for a in range(3):
+                mesh.cic_paint(pos, nmesh, boxsize=box_kpc_h, out=mom[a],
+                               weights=vel[:, a])                    # momentum
+
+    empty = int((cnt == 0).sum())
+    if field == "velocity":
+        safe = np.where(cnt > 0, cnt, 1.0)          # 0/0 -> 0, never NaN
+        mom /= safe                                 # in-place: avoid a second 3*nmesh^3 f64 copy
+        out = mom
+        if empty:
+            warnings.warn(
+                f"{empty} of {nmesh ** 3} cells are empty (no particles) and were set "
+                f"to v=0; nmesh={nmesh} is finer than the particle grid"
+            )
+    else:
+        out = mom
+
+    return ICVelocityField(
+        v=out.astype(np.float32),
+        nmesh=nmesh,
+        box=units.kpc_h_to_mpc_h(box_kpc_h),
+        ptype=ptype,
+        redshift=redshift,
+        field=field,
+        npart=npart,
+        units=UNITS_BY_FIELD[field],   # never assert a unit we did not apply
+        space="real",
+        meta={
+            "ic_dir": str(ic_dir),
+            "cell_kpc_h": box_kpc_h / nmesh,
+            "empty_cells": empty,
+            # The factor needed to turn field="momentum" back into km/s (see the
+            # docstring): counts = (1+delta_cic) * mean_particles_per_cell.
+            "mean_particles_per_cell": npart / float(nmesh ** 3),
+            "use_peculiar_velocity": upv,
+            "hubble": hubble,
+            "Omega0": omega0,
+            "OmegaLambda": omega_lambda,
+            "OmegaBaryon": omega_b,   # f_b = OmegaBaryon/Omega0: needed to build total-matter delta_1
+            "Time": time,
+            "los_is_velocity_axis": False,
         },
     )

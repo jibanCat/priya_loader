@@ -29,15 +29,23 @@ Design notes for users familiar with the simulations:
   * The flux (tau) arrays are returned *exactly* as stored, only reshaped per
     skewer axis (never resampled/rebinned). The IC mesh is the thing you choose
     the resolution/orientation of, so the two cubes can be co-registered.
-  * Internal MP-Gadget units (kpc/h comoving, 1e10 Msun/h, km/s with the Gadget
-    sqrt(a) velocity convention) are documented in :mod:`priya_loader.units`.
+  * Internal MP-Gadget units (kpc/h comoving, 1e10 Msun/h, km/s in whichever
+    convention the IC header's ``UsePeculiarVelocity`` flag records — PRIYA's
+    is already peculiar km/s, so do NOT apply the Gadget sqrt(a) factor to it)
+    are documented in :mod:`priya_loader.units`.
 """
 
 __version__ = "0.2.0.dev0"
 
 from . import mesh, units  # noqa: E402
 from .dataset import PriyaDataset, Sample  # noqa: E402
-from .ic import ICField, load_ic_density, load_ic_particles  # noqa: E402
+from .ic import (  # noqa: E402
+    ICField,
+    ICVelocityField,
+    load_ic_density,
+    load_ic_particles,
+    load_ic_velocity_mesh,
+)
 from .params import SimParams, parse_sim_name  # noqa: E402
 from .paths import (  # noqa: E402
     SimulationPaths,
@@ -58,8 +66,10 @@ __all__ = [
     "parse_sim_name",
     # initial conditions
     "ICField",
+    "ICVelocityField",
     "load_ic_density",
     "load_ic_particles",
+    "load_ic_velocity_mesh",
     # discovery
     "SimulationPaths",
     "discover_simulations",

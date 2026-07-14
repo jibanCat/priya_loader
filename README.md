@@ -46,6 +46,13 @@ the `ROOT` cell to point at your own copy. To run it, `pip install -e ".[ic,note
 the **production** grid (1536³/3072³); where only the 512³ companion is staged, use
 the explicit `load_ic_density(.../ICS/120_512_99, …)` shown in the notebook.
 
+📓 **Companion notebook:** [`notebooks/ic_particles.ipynb`](notebooks/ic_particles.ipynb)
+zooms in on raw DM particle positions/velocities at the IC redshift (z≈99) —
+`load_ic_particles`, the `UsePeculiarVelocity` units check, and
+`load_ic_velocity_mesh` vs. `load_ic_density` co-registration. See the
+[Dark matter positions & velocities](#dark-matter-positions--velocities) section
+below for the same material in prose.
+
 > **Status.** This version ships the full stack: the building blocks (`units`,
 > `params`, `runconfig`, `paths`), the Lyman-α `tau` loader (`load_tau_grid`), the
 > IC density loader (`load_ic_density`), **and the `PriyaDataset` orchestrator**
@@ -167,7 +174,8 @@ no meshing:
 from priya_loader import load_ic_particles
 data, header = load_ic_particles(ic_dir, ptype="dm", columns=("Position",), subsample=1)
 data["Position"]        # (N, 3) comoving kpc/h ; also "Velocity"/"ICDensity"/"ID"
-# header: box_mpc_h, hubble, redshift
+# header: box_kpc_h, box_mpc_h, hubble, redshift, scale_factor,
+#         use_peculiar_velocity, velocity_units, Omega0, OmegaLambda
 ```
 
 (Our built-in CIC is verified bit-for-bit vs an explicit reference, and to float32 roundoff vs Pylians;
@@ -187,6 +195,74 @@ nbodykit's compensation/interlacing are opt-in "tricks" we don't apply.)
 Peak ≈ `2·nmesh³` float64 (mesh + one transient bincount) + ~1 GB chunk; **use
 `nmesh ≤ 512` on a login node** (for `cic`, `480` matches the τ transverse grid;
 for `icdensity` use a divisor of `ngrid` — see the warning above).
+
+**This table is for `load_ic_density` only — `load_ic_velocity_mesh` is
+heavier.** It accumulates one float64 momentum grid *per velocity component*
+(`3·nmesh³`, vs. density's single `nmesh³` grid) plus the `nmesh³` count grid,
+so peak resident memory runs **~4x** the density figures above at the same
+`nmesh` (e.g. ~10–12 GB, not 3.0 GB, at `nmesh=512`) even though the
+`field="velocity"` normalisation divides in place (no extra `3·nmesh³` output
+copy). Budget accordingly — prefer `nmesh ≤ 256` for `load_ic_velocity_mesh`
+on a login node, and a compute/batch node for `nmesh=512` and above.
+
+### Dark matter positions & velocities
+
+📓 Worked example: [`notebooks/ic_particles.ipynb`](notebooks/ic_particles.ipynb).
+
+The IC bigfile carries the particle `Position` and `Velocity` for both species
+(`ptype="dm"` = type 1, `ptype="gas"` = type 0):
+
+```python
+from priya_loader import load_ic_particles
+
+data, header = load_ic_particles(
+    ic_dir,                                   # <sim>/ICS/120_512_99
+    ptype="dm",
+    columns=("Position", "Velocity"),
+    subsample=8,                              # keep every 8th particle
+)
+data["Position"]   # (N, 3) comoving kpc/h
+data["Velocity"]   # (N, 3) PECULIAR km/s
+header["redshift"] # ~99  (the IC redshift)
+```
+
+**Units — the one thing to get right.** MP-GenIC can write velocities in either
+of two conventions, and it records which one in the IC header
+(`UsePeculiarVelocity`). PRIYA's ICs use the peculiar-km/s convention, so the
+stored block needs **no** `sqrt(a)` rescaling — applying the Gadget-2 `sqrt(a)`
+factor anyway would make the velocities **10x too small at z=99**. The loader
+reads the header flag and returns peculiar km/s either way; pass
+`velocity="raw"` if you want the stored block untouched. If the flag is missing,
+the loader raises rather than guess.
+
+Gas and DM velocities are **not** the same field: PRIYA runs GenIC with
+`DifferentTransferFunctions = 1`, so each species is drawn from its own CLASS
+velocity transfer function (and `v` is *not* just a rescaled Zel'dovich
+displacement).
+
+**Only the ICs have particles.** MP-Gadget was configured to write snapshots
+(`output/PART_*`), but the PRIYA archive kept only the Lyman-alpha spectra — so
+z ≈ 99 is the only redshift at which particle positions/velocities exist.
+
+For the velocity as a *field* rather than particles:
+
+```python
+from priya_loader import load_ic_velocity_mesh
+
+vf = load_ic_velocity_mesh(ic_dir, ptype="dm", nmesh=256, field="velocity")
+vf.v            # (3, 256, 256, 256) float32, peculiar km/s, [component][x,y,z]
+vf.meta["empty_cells"]   # 0 unless nmesh is finer than the particle grid
+```
+
+`field="momentum"` returns the un-normalised CIC momentum (linear in `v`; prefer
+it for Fourier work). The mesh shares the origin and axis order of
+`load_ic_density`, so it co-registers with the density field.
+
+**Memory (raw particles).** The staged low-res IC is 512³ = 1.34e8 particles:
+`Position` (f8) is 3.2 GB and `Velocity` (f4) 1.6 GB for a full load — use
+`subsample` on a login node. The 3072³ hi-res IC (2.9e10 particles) cannot be
+loaded as raw particles at all; use `load_ic_velocity_mesh` / `load_ic_density`
+(streamed) on a compute node.
 
 ### Why a `runconfig` module?
 
@@ -240,10 +316,14 @@ real-space overdensity `δ = ρ/⟨ρ⟩−1` (float32) at `z_init≈99`.
 
 ## Units
 
-MP-Gadget internal units (comoving **kpc/h**, **10¹⁰ M☉/h**, **km/s** with the
-Gadget √a velocity convention) and all conversions live in
-[`priya_loader/units.py`](priya_loader/units.py), with a dedicated physics-unit
-test suite — the easiest place to get a subtle factor wrong.
+MP-Gadget internal units (comoving **kpc/h**, **10¹⁰ M☉/h**, **km/s**) and all
+conversions live in [`priya_loader/units.py`](priya_loader/units.py), with a
+dedicated physics-unit test suite — the easiest place to get a subtle factor
+wrong. Velocity is the one unit that is **not** a fixed convention: MP-GenIC
+records which one was used in the IC header's `UsePeculiarVelocity` flag, and
+PRIYA's ICs are already peculiar km/s (the Gadget-2 `sqrt(a)` rescaling does
+**not** apply to them — see `units.ic_velocity_to_peculiar_kms`, or just call
+`load_ic_particles`/`load_ic_velocity_mesh`, which dispatch on the flag for you).
 
 ## Development
 

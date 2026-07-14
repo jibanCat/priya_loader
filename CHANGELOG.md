@@ -6,6 +6,22 @@ All notable changes to `priya_loader`. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- `load_ic_velocity_mesh` — CIC velocity/momentum field from the IC particles
+  (`(3, nmesh, nmesh, nmesh)`, co-registered with `load_ic_density`);
+  `ICVelocityField`. `field="velocity"` is the mean cell velocity in peculiar
+  km/s; `field="momentum"` is the **un-normalised** CIC sum (km/s ×
+  particles-per-cell, *not* km/s — `ICVelocityField.units` says which you got).
+- `units.ic_velocity_to_peculiar_kms` — converts a stored IC `Velocity` block to
+  peculiar km/s by dispatching on the IC header's `UsePeculiarVelocity` flag.
+- `notebooks/ic_particles.ipynb` — short demo of DM positions/velocities.
+- `PriyaDataset(..., ic_companion_fallback=True)` — when the production-resolution IC is
+  not staged (the NERSC reality: only the 512³ `120_512_99` companion is transferred),
+  fall back to the largest staged companion instead of yielding `ic=None` for every sim.
+  Opt-in (default off); the production grid is still preferred when present.
+  `Sample.meta["ic_meta"]["ic_is_production"]` records which grid was used — a companion
+  is the same realization at lower particle resolution.
+- Real-IC test asserting `v_rms` matches linear theory `a·H·f·σ_disp` (catches a
+  `sqrt(a)` units error, which is a 10× effect at z=99).
 - `tests/test_real_ic.py` — real-IC verification, gated behind `PRIYA_REAL_IC`
   (skips by default). Codifies the NERSC sign-off the synthetic fixtures can't
   reach: resolution/box invariants, the linear `δ₁` (`icdensity`) and Eulerian
@@ -23,10 +39,35 @@ All notable changes to `priya_loader`. Format loosely follows
   bigfile pins); corrected the `A_p` pivot label (8 Mpc scale, `k≈0.785 Mpc⁻¹`).
 
 ### Changed
+- **`load_ic_particles` now returns `Velocity` in peculiar km/s by default**
+  (`velocity="peculiar_kms"`; pass `velocity="raw"` for the stored block). It reads
+  `UsePeculiarVelocity` from the IC header and **raises** if a conversion is
+  requested and the flag is absent. For PRIYA the flag is 1, so the *values* are
+  unchanged — what is new is the guarantee and the metadata (`scale_factor`,
+  `use_peculiar_velocity`, `velocity_units` in the returned header).
 - `notebooks/quickstart.ipynb` rewritten as a step-by-step **pedagogical** tutorial
   for users new to MP-Gadget: it defaults to the staged NERSC PRIYA path, makes
   explicit that the low-res ICs are **512³**, and walks through loader usage plus
   simple matplotlib visualizations of the parameters, τ/flux fields, and IC density.
+
+### Fixed
+- **`subsample` now bounds peak memory, not just the returned row count.** A strided
+  slice of a bigfile chunk is a numpy *view* that keeps its whole parent chunk alive,
+  so accumulating subsampled views pinned the entire `Position` block regardless of
+  `subsample` — the "memory-aware" subsample the README and notebook recommend could
+  OOM a login node. The slice is now copied. Measured on a real 512³ IC: a 67k-particle
+  sample dropped from **3.26 GB → 0.31 GB** peak RSS (the block is 87 GB at 1536³, 696 GB
+  at 3072³). Pre-existing since v0.1.0; the deliverable's docs lean on this call.
+- **The IC loaders now raise on a skeleton or half-written (mid-transfer) IC** instead
+  of silently returning empty or partial arrays. Each particle block is checked against
+  the Header's `TotNumPart`, so a partially transferred IC — which would paint a `δ₁`
+  (hence a `b_F`) with the wrong mean and a hole where the untransferred Lagrangian
+  region is, with no diagnostic — now fails loudly and names the unstaged simulation.
+  The guard covers all three IC loaders, including `load_ic_density(field="cic")` — the
+  path `PriyaDataset` loads by default, and the one that would otherwise carry a corrupt
+  IC straight into `Sample.ic`.
+- `header["velocity_units"]` no longer asserts `"km/s (peculiar)"` when `Velocity` was
+  not loaded, or when the IC header lacks the `UsePeculiarVelocity` flag.
 
 ## [0.1.0] — 2026-06-29
 

@@ -73,6 +73,14 @@ class PriyaDataset:
         Line-of-sight axis for the tau cube.
     load_ic : bool
         If False, skip IC loading (``Sample.ic`` is None) — fast, tau-only.
+    ic_companion_fallback : bool
+        If True and the production-resolution IC is not staged, fall back to the
+        largest staged companion grid (e.g. the 512³ ``120_512_99``) instead of
+        yielding ``ic=None``. Opt-in (default False); the production grid is still
+        preferred when present. ``Sample.meta["ic_meta"]["ic_is_production"]`` records
+        which grid was used — a companion is the same realization at lower particle
+        resolution, so a bias-cross-spectrum consumer should not difference it against
+        production-resolution power without accounting for the window.
     validate : bool
         Validate each ``SimParams`` (resolution + name/JSON consistency).
     """
@@ -87,6 +95,7 @@ class PriyaDataset:
         ic_field: str = "cic",
         flux_axis: int = 1,
         load_ic: bool = True,
+        ic_companion_fallback: bool = False,
         validate: bool = True,
     ):
         if flux_axis not in (1, 2, 3):
@@ -104,6 +113,7 @@ class PriyaDataset:
         self.ic_field = ic_field
         self.flux_axis = flux_axis
         self.load_ic = load_ic
+        self.ic_companion_fallback = ic_companion_fallback
         self.validate = validate
 
     def __iter__(self) -> Iterator[Sample]:
@@ -125,7 +135,22 @@ class PriyaDataset:
 
             ic_arr, ic_meta = None, {}
             if self.load_ic:
-                ic_dir = paths.find_production_ic_dir(sim.directory)
+                prod_dir = paths.find_production_ic_dir(sim.directory)
+                ic_dir = prod_dir
+                if ic_dir is None and self.ic_companion_fallback:
+                    # Production grid (e.g. 1536^3) not staged -> fall back to the
+                    # largest staged companion. On NERSC only the 512^3 companion is
+                    # transferred, so without this the default loop yields ic=None for
+                    # every sim. Same realization, LOWER particle resolution -> flag it
+                    # (ic_is_production=False) so a b_F consumer knows the IC is not
+                    # production-res before differencing against production-res power.
+                    ic_dir = paths.find_ic_dir(sim.directory)
+                    if ic_dir is not None:
+                        warnings.warn(
+                            f"{sim.name}: production IC not staged; using companion "
+                            f"{ic_dir.name} (lower resolution; "
+                            f"meta['ic_meta']['ic_is_production']=False)"
+                        )
                 if ic_dir is not None:
                     try:
                         f = load_ic_density(ic_dir, ptype=self.ic_ptype,
@@ -133,7 +158,8 @@ class PriyaDataset:
                         ic_arr = f.delta
                         ic_arr.flags.writeable = False     # shared across this sim's redshifts
                         ic_meta = {"ic_axes": f.axes, "ic_space": f.space,
-                                   "ic_redshift": f.redshift, **f.meta}
+                                   "ic_redshift": f.redshift, **f.meta,
+                                   "ic_is_production": prod_dir is not None}
                     except Exception as e:   # skeleton/corrupt ICs raise various bigfile errors
                         warnings.warn(f"{sim.name}: IC load failed ({e!r}); ic=None")
 
